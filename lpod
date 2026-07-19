@@ -121,7 +121,8 @@ function display_help {
     echo "  ${GREEN}lpod uninstall APPLICATION${NC}             Remove an application and all of its quadlets"
     echo "  ${GREEN}lpod list${NC}                               List installed quadlets"
     echo "  ${GREEN}lpod print NAME${NC}                        Print the generated systemd unit for a quadlet"
-    echo "  All of the above accept any extra flags 'podman quadlet' itself takes (e.g. --replace, --application)."
+    echo "  ${GREEN}lpod reload${NC}                             Reload the systemd manager configuration (daemon-reload)"
+    echo "  All of the above (except 'reload') accept any extra flags 'podman quadlet' itself takes (e.g. --replace, --application)."
 
     exit 1
 }
@@ -226,6 +227,14 @@ function cmd_secrets {
 # "publish_path" config key (default "podman")...
 export LPOD_PUBLISH_PATH=${LPOD_PUBLISH_PATH:-"podman"}
 
+# Use the system-wide systemd manager when running as root, otherwise the
+# per-user manager backing rootless Quadlet services...
+if [ "$(id -u)" -eq 0 ]; then
+    SYSTEMCTL_CMD=(systemctl)
+else
+    SYSTEMCTL_CMD=(systemctl --user)
+fi
+
 # Show help when no service, or an explicit help flag, is given...
 if [ $# -eq 0 ] || [ "$1" == "help" ] || [ "$1" == "-h" ] || [ "$1" == "-help" ] || [ "$1" == "--help" ]; then
     display_help
@@ -264,6 +273,11 @@ case "$1" in
     print)
         shift
         exec "${LPOD_PODMAN_BINARY:-podman}" quadlet print "$@"
+        ;;
+
+    reload)
+        shift
+        exec "${SYSTEMCTL_CMD[@]}" daemon-reload "$@"
         ;;
 esac
 
@@ -322,14 +336,6 @@ function forward_agent_env() {
         fi
     done
 }
-
-# Use the system-wide systemd manager when running as root, otherwise the
-# per-user manager backing rootless Quadlet services...
-if [ "$(id -u)" -eq 0 ]; then
-    SYSTEMCTL_CMD=(systemctl)
-else
-    SYSTEMCTL_CMD=(systemctl --user)
-fi
 
 # Quadlet installs a Podman container named "systemd-<unit>" for every
 # "<unit>.service" it manages, to avoid clashing with unmanaged containers...

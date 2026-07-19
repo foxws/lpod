@@ -40,7 +40,7 @@ alias lpod='[ -f lpod ] && bash lpod || bash "$(git rev-parse --show-toplevel)/l
 lpod SERVICE COMMAND [options] [arguments]
 ```
 
-`SERVICE` is the name of a Quadlet service (your app, or a sibling service like `pgsql`). Quadlet management commands (`setup`, `install`, `remove`, `uninstall`, `list`, `print`) skip `SERVICE` — they manage Quadlets themselves rather than talking to a running service.
+`SERVICE` is the name of a Quadlet service (your app, or a sibling service like `pgsql`). Quadlet management commands (`setup`, `install`, `remove`, `uninstall`, `list`, `print`, `reload`) skip `SERVICE` — they manage Quadlets themselves rather than talking to a running service.
 
 `lpod --version` (or `-v`/`version`) prints the installed version.
 
@@ -117,8 +117,9 @@ lpod SERVICE COMMAND [options] [arguments]
 | `lpod uninstall APPLICATION`           | Remove an application and all of its Quadlets       |
 | `lpod list`                            | List installed Quadlets                              |
 | `lpod print NAME`                      | Print the generated systemd unit                     |
+| `lpod reload`                          | Reload the systemd manager configuration (`daemon-reload`) |
 
-All Quadlet management commands accept any extra flags `podman quadlet` itself takes (`--replace`, `--application`, `--force`, `--ignore`, etc). `secrets` (see [Lifecycle](#lifecycle) above) also forwards its extra flags, but to `podman secret create`.
+All Quadlet management commands except `reload` accept any extra flags `podman quadlet` itself takes (`--replace`, `--application`, `--force`, `--ignore`, etc). `secrets` (see [Lifecycle](#lifecycle) above) also forwards its extra flags, but to `podman secret create`.
 
 `lpod app secrets` is built into `lpod` — no separate script needed. It reads `Secret=` directives off an installed unit (`podman quadlet print SERVICE.container`) and prompts for each: `type=env` asks for a masked value, `type=mount` (the default) asks for a file path (`.env` by default) and stores its contents. A secret reused under multiple names is only prompted once.
 
