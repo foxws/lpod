@@ -300,7 +300,7 @@ fi
 
 # Define environment variables...
 export APP_PORT=${APP_PORT:-80}
-export APP_USER=${APP_USER:-"docker"}
+export APP_USER=${APP_USER:-}
 export LPOD_PODMAN_BINARY=${LPOD_PODMAN_BINARY:-"podman"}
 
 # AI agent environment variables to forward into containers...
@@ -348,6 +348,13 @@ else
     TTY_ARGS=(-i)
 fi
 
+# Only force a user with "-u" when APP_USER is set; otherwise let the image's
+# own default user apply...
+APP_USER_ARGS=()
+if [ -n "$APP_USER" ]; then
+    APP_USER_ARGS=(-u "$APP_USER")
+fi
+
 COMMAND="$1"
 shift
 
@@ -379,7 +386,7 @@ case "$COMMAND" in
 
     # Proxy PHP commands to the "php" binary on the service container...
     php)
-        ARGS+=(exec -u "$APP_USER" "${TTY_ARGS[@]}")
+        ARGS+=(exec "${APP_USER_ARGS[@]}" "${TTY_ARGS[@]}")
         forward_agent_env
         ARGS+=("$CONTAINER" php)
         ;;
@@ -388,7 +395,7 @@ case "$COMMAND" in
     bin)
         CMD="$1"
         shift
-        ARGS+=(exec -u "$APP_USER" "${TTY_ARGS[@]}")
+        ARGS+=(exec "${APP_USER_ARGS[@]}" "${TTY_ARGS[@]}")
         forward_agent_env
         ARGS+=("$CONTAINER" "./vendor/bin/${CMD}")
         ;;
@@ -397,140 +404,140 @@ case "$COMMAND" in
     run)
         CMD="$1"
         shift
-        ARGS+=(exec -u "$APP_USER" "${TTY_ARGS[@]}")
+        ARGS+=(exec "${APP_USER_ARGS[@]}" "${TTY_ARGS[@]}")
         forward_agent_env
         ARGS+=("$CONTAINER" "$CMD")
         ;;
 
     # Proxy Composer commands to the "composer" binary on the service container...
     composer)
-        ARGS+=(exec -u "$APP_USER" "${TTY_ARGS[@]}")
+        ARGS+=(exec "${APP_USER_ARGS[@]}" "${TTY_ARGS[@]}")
         forward_agent_env
         ARGS+=("$CONTAINER" composer)
         ;;
 
     # Proxy Artisan commands to the "artisan" binary on the service container...
     artisan|art|a)
-        ARGS+=(exec -u "$APP_USER" "${TTY_ARGS[@]}")
+        ARGS+=(exec "${APP_USER_ARGS[@]}" "${TTY_ARGS[@]}")
         forward_agent_env
         ARGS+=("$CONTAINER" php artisan)
         ;;
 
     # Proxy the "debug" command to "php artisan" on the service container with xdebug enabled...
     debug)
-        ARGS+=(exec -u "$APP_USER" -e XDEBUG_TRIGGER=1 "${TTY_ARGS[@]}")
+        ARGS+=(exec "${APP_USER_ARGS[@]}" -e XDEBUG_TRIGGER=1 "${TTY_ARGS[@]}")
         forward_agent_env
         ARGS+=("$CONTAINER" php artisan)
         ;;
 
     # Proxy the "test" command to the "php artisan test" Artisan command...
     test)
-        ARGS+=(exec -u "$APP_USER" "${TTY_ARGS[@]}")
+        ARGS+=(exec "${APP_USER_ARGS[@]}" "${TTY_ARGS[@]}")
         forward_agent_env
         ARGS+=("$CONTAINER" php artisan test)
         ;;
 
     # Proxy the "phpunit" command to "php vendor/bin/phpunit"...
     phpunit)
-        ARGS+=(exec -u "$APP_USER" "${TTY_ARGS[@]}")
+        ARGS+=(exec "${APP_USER_ARGS[@]}" "${TTY_ARGS[@]}")
         forward_agent_env
         ARGS+=("$CONTAINER" php vendor/bin/phpunit)
         ;;
 
     # Proxy the "pest" command to "php vendor/bin/pest"...
     pest)
-        ARGS+=(exec -u "$APP_USER" "${TTY_ARGS[@]}")
+        ARGS+=(exec "${APP_USER_ARGS[@]}" "${TTY_ARGS[@]}")
         forward_agent_env
         ARGS+=("$CONTAINER" php vendor/bin/pest)
         ;;
 
     # Proxy the "pint" command to "php vendor/bin/pint"...
     pint)
-        ARGS+=(exec -u "$APP_USER" "${TTY_ARGS[@]}")
+        ARGS+=(exec "${APP_USER_ARGS[@]}" "${TTY_ARGS[@]}")
         forward_agent_env
         ARGS+=("$CONTAINER" php vendor/bin/pint)
         ;;
 
     # Proxy the "dusk" command to the "php artisan dusk" Artisan command...
     dusk)
-        ARGS+=(exec -u "$APP_USER" -e "APP_URL=http://${CONTAINER}" -e "DUSK_DRIVER_URL=http://selenium:4444/wd/hub" "${TTY_ARGS[@]}")
+        ARGS+=(exec "${APP_USER_ARGS[@]}" -e "APP_URL=http://${CONTAINER}" -e "DUSK_DRIVER_URL=http://selenium:4444/wd/hub" "${TTY_ARGS[@]}")
         forward_agent_env
         ARGS+=("$CONTAINER" php artisan dusk)
         ;;
 
     # Proxy the "dusk:fails" command to the "php artisan dusk:fails" Artisan command...
     dusk:fails)
-        ARGS+=(exec -u "$APP_USER" -e "APP_URL=http://${CONTAINER}" -e "DUSK_DRIVER_URL=http://selenium:4444/wd/hub" "${TTY_ARGS[@]}")
+        ARGS+=(exec "${APP_USER_ARGS[@]}" -e "APP_URL=http://${CONTAINER}" -e "DUSK_DRIVER_URL=http://selenium:4444/wd/hub" "${TTY_ARGS[@]}")
         forward_agent_env
         ARGS+=("$CONTAINER" php artisan dusk:fails)
         ;;
 
     # Initiate a Laravel Tinker session within the service container...
     tinker)
-        ARGS+=(exec -u "$APP_USER" "${TTY_ARGS[@]}")
+        ARGS+=(exec "${APP_USER_ARGS[@]}" "${TTY_ARGS[@]}")
         forward_agent_env
         ARGS+=("$CONTAINER" php artisan tinker)
         ;;
 
     # Proxy Node commands to the "node" binary on the service container...
     node)
-        ARGS+=(exec -u "$APP_USER" "${TTY_ARGS[@]}")
+        ARGS+=(exec "${APP_USER_ARGS[@]}" "${TTY_ARGS[@]}")
         forward_agent_env
         ARGS+=("$CONTAINER" node)
         ;;
 
     # Proxy NPM commands to the "npm" binary on the service container...
     npm)
-        ARGS+=(exec -u "$APP_USER" "${TTY_ARGS[@]}")
+        ARGS+=(exec "${APP_USER_ARGS[@]}" "${TTY_ARGS[@]}")
         forward_agent_env
         ARGS+=("$CONTAINER" npm)
         ;;
 
     # Proxy NPX commands to the "npx" binary on the service container...
     npx)
-        ARGS+=(exec -u "$APP_USER" "${TTY_ARGS[@]}")
+        ARGS+=(exec "${APP_USER_ARGS[@]}" "${TTY_ARGS[@]}")
         forward_agent_env
         ARGS+=("$CONTAINER" npx)
         ;;
 
     # Proxy PNPM commands to the "pnpm" binary on the service container...
     pnpm)
-        ARGS+=(exec -u "$APP_USER" "${TTY_ARGS[@]}")
+        ARGS+=(exec "${APP_USER_ARGS[@]}" "${TTY_ARGS[@]}")
         forward_agent_env
         ARGS+=("$CONTAINER" pnpm)
         ;;
 
     # Proxy PNPX commands to the "pnpx" binary on the service container...
     pnpx)
-        ARGS+=(exec -u "$APP_USER" "${TTY_ARGS[@]}")
+        ARGS+=(exec "${APP_USER_ARGS[@]}" "${TTY_ARGS[@]}")
         forward_agent_env
         ARGS+=("$CONTAINER" pnpx)
         ;;
 
     # Proxy Yarn commands to the "yarn" binary on the service container...
     yarn)
-        ARGS+=(exec -u "$APP_USER" "${TTY_ARGS[@]}")
+        ARGS+=(exec "${APP_USER_ARGS[@]}" "${TTY_ARGS[@]}")
         forward_agent_env
         ARGS+=("$CONTAINER" yarn)
         ;;
 
     # Proxy Bun commands to the "bun" binary on the service container...
     bun)
-        ARGS+=(exec -u "$APP_USER" "${TTY_ARGS[@]}")
+        ARGS+=(exec "${APP_USER_ARGS[@]}" "${TTY_ARGS[@]}")
         forward_agent_env
         ARGS+=("$CONTAINER" bun)
         ;;
 
     # Proxy Bun X commands to the "bunx" binary on the service container...
     bunx)
-        ARGS+=(exec -u "$APP_USER" "${TTY_ARGS[@]}")
+        ARGS+=(exec "${APP_USER_ARGS[@]}" "${TTY_ARGS[@]}")
         forward_agent_env
         ARGS+=("$CONTAINER" bunx)
         ;;
 
     # Initiate a Bash shell within the service container...
     shell|bash)
-        ARGS+=(exec -u "$APP_USER" "${TTY_ARGS[@]}")
+        ARGS+=(exec "${APP_USER_ARGS[@]}" "${TTY_ARGS[@]}")
         forward_agent_env
         ARGS+=("$CONTAINER" bash)
         ;;
