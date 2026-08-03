@@ -300,7 +300,7 @@ fi
 
 # Define environment variables...
 export APP_PORT=${APP_PORT:-80}
-export APP_USER=${APP_USER:-}
+export APP_USER=${APP_USER-"$(id -u)"}
 export LPOD_PODMAN_BINARY=${LPOD_PODMAN_BINARY:-"podman"}
 
 # AI agent environment variables to forward into containers...
