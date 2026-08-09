@@ -213,8 +213,14 @@ function cmd_secrets {
 
             "$PODMAN" secret create "$NAME" - "${EXTRA_ARGS[@]}" < "$PATH_INPUT" || return 1
         else
-            read -rsp "Enter the value for ${NAME} (${SECRET_TARGETS[$NAME]}): " VALUE
+            read -rsp "Enter the value for ${NAME} (${SECRET_TARGETS[$NAME]}), or leave blank to keep the current value: " VALUE
             echo
+
+            if [ -z "$VALUE" ]; then
+                echo "Skipping ${NAME} (kept existing value)."
+
+                continue
+            fi
 
             printf '%s' "$VALUE" | "$PODMAN" secret create "$NAME" - "${EXTRA_ARGS[@]}" || return 1
         fi

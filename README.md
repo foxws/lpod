@@ -42,6 +42,8 @@ lpod SERVICE COMMAND [options] [arguments]
 
 `SERVICE` is the name of a Quadlet service (your app, or a sibling service like `pgsql`). Quadlet management commands (`setup`, `install`, `remove`, `uninstall`, `list`, `print`, `reload`) skip `SERVICE` — they manage Quadlets themselves rather than talking to a running service.
 
+Quadlet installs the actual Podman container for `SERVICE.container` under the name `systemd-SERVICE` (e.g. `systemd-my-app`), to avoid clashing with unmanaged containers. `lpod` accounts for this automatically for `exec`-based commands (`shell`, `run`, `artisan`, etc.) — you always refer to the service by its plain `SERVICE` name, but expect to see the `systemd-` prefix if you inspect containers directly with `podman ps`.
+
 `lpod --version` (or `-v`/`version`) prints the installed version.
 
 ## Commands reference
@@ -121,7 +123,7 @@ lpod SERVICE COMMAND [options] [arguments]
 
 All Quadlet management commands except `reload` accept any extra flags `podman quadlet` itself takes (`--replace`, `--application`, `--force`, `--ignore`, etc). `secrets` (see [Lifecycle](#lifecycle) above) also forwards its extra flags, but to `podman secret create`.
 
-`lpod app secrets` is built into `lpod` — no separate script needed. It reads `Secret=` directives off an installed unit (`podman quadlet print SERVICE.container`) and prompts for each: `type=env` asks for a masked value, `type=mount` (the default) asks for a file path (`.env` by default) and stores its contents. A secret reused under multiple names is only prompted once.
+`lpod app secrets` is built into `lpod` — no separate script needed. It reads `Secret=` directives off an installed unit (`podman quadlet print SERVICE.container`) and prompts for each: `type=env` asks for a masked value, `type=mount` (the default) asks for a file path (`.env` by default) and stores its contents. A secret reused under multiple names is only prompted once. For `type=env` secrets, leaving the value blank (just pressing Enter) skips that secret and keeps its current value untouched — handy for updating a single secret in a quadlet with `lpod app secrets --replace` without having to re-enter every other one.
 
 > **Warning:** `remove`/`uninstall` delete the Podman volumes owned by the services they remove, with no undo.
 
