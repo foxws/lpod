@@ -4,7 +4,7 @@ A single bash script for managing [Podman Quadlet](https://docs.podman.io/en/lat
 
 Pairs naturally with [foxws/laravel-podman](https://github.com/foxws/laravel-podman), whose Artisan `podman:*` commands render Quadlet files, but `lpod` doesn't require it — point it at any Quadlet-managed service.
 
-Full documentation is available at [foxws.github.io/lpod](https://foxws.github.io/lpod/).
+See the [full documentation](https://foxws.github.io/lpod/) (or browse [`docs/`](docs) directly): [Installation](docs/installation.md), [Usage](docs/usage.md), [Commands](docs/commands.md), [Configuration](docs/configuration.md).
 
 ## Requirements
 
