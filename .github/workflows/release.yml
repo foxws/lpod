@@ -17,18 +17,18 @@ jobs:
       - name: Bake the tag into LPOD_VERSION
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
-          sed -i "s/^LPOD_VERSION=\"dev\"\$/LPOD_VERSION=\"${VERSION}\"/" lpod
-          chmod +x lpod
-          ./lpod --version
+          sed -i "s/^LPOD_VERSION=\"dev\"\$/LPOD_VERSION=\"${VERSION}\"/" bin/lpod
+          chmod +x bin/lpod
+          ./bin/lpod --version
 
       - name: Create or update GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           if gh release view "${GITHUB_REF_NAME}" &>/dev/null; then
-            gh release upload "${GITHUB_REF_NAME}" lpod --clobber
+            gh release upload "${GITHUB_REF_NAME}" bin/lpod --clobber
           else
-            gh release create "${GITHUB_REF_NAME}" lpod \
+            gh release create "${GITHUB_REF_NAME}" bin/lpod \
               --title "${GITHUB_REF_NAME}" \
               --generate-notes
           fi
