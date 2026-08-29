@@ -69,7 +69,7 @@ sidebar_position: 4
 
 | Command                                | Description                                        |
 | ----------------------------------------- | ----------------------------------------------------- |
-| `lpod setup ...`                       | Render presets without PHP on the host (alias for `lpod-setup`, shipped alongside `lpod`; still shells out to `php artisan podman:setup`, needing [foxws/laravel-podman](https://github.com/foxws/laravel-podman)'s `vendor/`) |
+| `lpod setup ...`                       | Render presets without PHP on the host (needs `lpod-setup`, shipped alongside `lpod`) |
 | `lpod install PRESET/SERVICE.quadlets` | Install a rendered Quadlet                          |
 | `lpod remove NAME`                     | Remove an installed Quadlet                          |
 | `lpod uninstall APPLICATION`           | Remove an application and all of its Quadlets       |
