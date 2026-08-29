@@ -19,6 +19,7 @@ fi
 
 # Define environment variables...
 PHP_IMAGE=${LPOD_SETUP_PHP_IMAGE:-"docker.io/library/php:8.5-cli"}
+COMPOSER_IMAGE=${LPOD_SETUP_COMPOSER_IMAGE:-"docker.io/library/composer:2"}
 PUBLISH_PATH=${LPOD_PUBLISH_PATH:-"podman"}
 
 # "--install"/"--secrets" are consumed here, not forwarded to "podman:setup"
@@ -46,6 +47,18 @@ if [ "$SECRETS" -eq 1 ] && ! command -v "$LPOD_BINARY" >/dev/null 2>&1; then
 
     exit 1
 fi
+
+# "podman:setup" needs the Laravel app's own dependencies (vendor/autoload.php)
+# to boot at all -- on a host with no PHP, they won't exist yet, so install
+# them the same disposable way, running as the host user so nothing ends up
+# owned by root...
+echo "Installing Composer dependencies using the '${COMPOSER_IMAGE}' image..."
+
+podman run --rm --userns=keep-id -u "$(id -u):$(id -g)" \
+    -v "$PWD":/app:Z -w /app "$COMPOSER_IMAGE" \
+    install --no-dev --optimize-autoloader --no-interaction
+
+echo
 
 # Render every requested preset's ".quadlets"/runtime files into
 # "$PUBLISH_PATH/{preset}", running as the host user so nothing ends up
