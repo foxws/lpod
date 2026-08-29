@@ -18,7 +18,7 @@ jobs:
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
           sed -i "s/^LPOD_VERSION=\"dev\"\$/LPOD_VERSION=\"${VERSION}\"/" bin/lpod
-          chmod +x bin/lpod
+          chmod +x bin/lpod bin/lpod-setup
           ./bin/lpod --version
 
       - name: Create or update GitHub release
@@ -26,9 +26,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           if gh release view "${GITHUB_REF_NAME}" &>/dev/null; then
-            gh release upload "${GITHUB_REF_NAME}" bin/lpod --clobber
+            gh release upload "${GITHUB_REF_NAME}" bin/lpod bin/lpod-setup --clobber
           else
-            gh release create "${GITHUB_REF_NAME}" bin/lpod \
+            gh release create "${GITHUB_REF_NAME}" bin/lpod bin/lpod-setup \
               --title "${GITHUB_REF_NAME}" \
               --generate-notes
           fi
