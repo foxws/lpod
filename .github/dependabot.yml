@@ -10,10 +10,3 @@ updates:
       interval: "weekly"
     labels:
       - "dependencies"
-
-  - package-ecosystem: "npm"
-    directory: "/website"
-    schedule:
-      interval: "weekly"
-    labels:
-      - "dependencies"

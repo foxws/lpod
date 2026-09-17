@@ -34,7 +34,7 @@ lpod app artisan migrate
 
 ## Docs
 
-Full documentation: **[foxws.github.io/lpod](https://foxws.github.io/lpod/)** (or browse [`docs/`](docs))
+Full documentation: browse [`docs/`](docs)
 
 - [Installation](docs/installation.md)
 - [Usage](docs/usage.md)
