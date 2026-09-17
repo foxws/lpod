@@ -1,33 +1,44 @@
 ---
-sidebar_position: 2
+section: Getting Started
+order: 1
 ---
 
 # Installation
+
+Download the script and make it executable:
 
 ```sh
 curl -fsSL -o ~/.local/bin/lpod https://github.com/foxws/lpod/releases/latest/download/lpod
 chmod +x ~/.local/bin/lpod
 ```
 
-Pin a specific release instead of `latest` for reproducibility:
+That's it — `lpod` is a single file with no other dependencies. It doesn't need PHP or Composer.
+
+## Pinning a version
+
+The command above always installs the latest release. To pin a specific version instead, download it directly:
 
 ```sh
 curl -fsSL -o ~/.local/bin/lpod https://github.com/foxws/lpod/releases/download/v0.1.0/lpod
 chmod +x ~/.local/bin/lpod
 ```
 
-Optional: also grab `lpod-setup` next to it, needed for `lpod setup` (rendering presets on a host with Podman but no PHP — see [foxws/laravel-podman](https://github.com/foxws/laravel-podman)):
+## Optional: lpod-setup
+
+`lpod setup` needs a second binary, `lpod-setup`. It renders presets on a host that has Podman but no PHP — see [foxws/laravel-podman](https://github.com/foxws/laravel-podman). Download it the same way:
 
 ```sh
 curl -fsSL -o ~/.local/bin/lpod-setup https://github.com/foxws/lpod/releases/latest/download/lpod-setup
 chmod +x ~/.local/bin/lpod-setup
 ```
 
-Or clone the repo and copy/symlink `lpod` onto your `PATH` yourself — note this gets the unreleased `main` branch, whose `lpod --version` reports `dev` rather than a tagged version. It's a single dependency-free script — no PHP or Composer required.
+## Installing from source
+
+You can also clone the repository and copy or symlink `lpod` onto your `PATH`. This gives you the unreleased `main` branch, so `lpod --version` reports `dev` instead of a tagged version number. Either way, it's a single dependency-free script — no PHP or Composer required.
 
 ## Optional: shell alias
 
-Resolves `lpod` relative to your current directory, so one alias works across every project:
+This alias finds `lpod` relative to your current directory, so the same alias works in every project:
 
 ```sh
 # Bash/Zsh, in ~/.bashrc or ~/.zshrc

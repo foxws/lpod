@@ -1,17 +1,26 @@
 ---
-sidebar_position: 3
+section: Usage
+order: 1
 ---
 
 # Usage
+
+Every command follows the same shape:
 
 ```sh
 lpod SERVICE COMMAND [options] [arguments]
 ```
 
-`SERVICE` is the name of a Quadlet service (your app, or a sibling service like `pgsql`). Quadlet management commands (`setup`, `install`, `remove`, `uninstall`, `list`, `print`, `reload`) skip `SERVICE` — they manage Quadlets themselves rather than talking to a running service.
+`SERVICE` is the name of a Quadlet service — your app, or a sibling service like `pgsql`.
 
-Quadlet installs the actual Podman container for `SERVICE.container` under the name `systemd-SERVICE` (e.g. `systemd-my-app`), to avoid clashing with unmanaged containers. `lpod` accounts for this automatically for `exec`-based commands (`shell`, `run`, `artisan`, etc.) — you always refer to the service by its plain `SERVICE` name, but expect to see the `systemd-` prefix if you inspect containers directly with `podman ps`.
+A few commands manage Quadlets themselves instead of talking to a running service, so they skip the `SERVICE` name: `setup`, `install`, `remove`, `uninstall`, `list`, `print`, and `reload`.
 
-`lpod --version` (or `-v`/`version`) prints the installed version.
+## Container naming
+
+Quadlet names the actual container `systemd-SERVICE` (for example, `systemd-my-app`) rather than just `SERVICE`, so it doesn't clash with containers you're not managing through Quadlet. `lpod` handles this naming for you automatically in commands that run inside the container (`shell`, `run`, `artisan`, and similar) — you always refer to the service by its plain `SERVICE` name. You'll only see the `systemd-` prefix if you inspect containers directly with `podman ps`.
+
+## Checking the version
+
+Run `lpod --version` (or `-v` / `version`) to print the installed version.
 
 Continue to [Commands reference](./commands.md) for the full list of commands.
