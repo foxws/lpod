@@ -584,4 +584,9 @@ case "$COMMAND" in
         ;;
 esac
 
+# Forward the host terminal's color capability to container commands...
+if [ "${ARGS[0]:-}" == "exec" ] && [ -n "${COLORTERM:-}" ]; then
+    ARGS=(exec -e "COLORTERM=${COLORTERM}" "${ARGS[@]:1}")
+fi
+
 exec "${LPOD_PODMAN_BINARY}" "${ARGS[@]}" "$@"
