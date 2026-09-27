@@ -74,11 +74,14 @@ This page lists every command `lpod` provides, grouped by what they do.
 | ----------------------------------------- | ---------------------------------------------------------------- |
 | `lpod setup ...`                       | Render presets without PHP on the host (needs `lpod-setup`, shipped alongside `lpod`) |
 | `lpod install PRESET/SERVICE.quadlets` | Install a rendered Quadlet                                   |
-| `lpod remove NAME`                     | Remove an installed Quadlet                                  |
+| `lpod install PRESET/UNIT.socket`      | Install and enable a rendered systemd socket or timer        |
+| `lpod remove NAME`                     | Remove an installed Quadlet, socket or timer                 |
 | `lpod uninstall APPLICATION`           | Remove an application and all of its Quadlets                |
 | `lpod list`                            | List installed Quadlets                                      |
 | `lpod print NAME`                      | Print the generated systemd unit                              |
 | `lpod reload`                          | Reload the systemd manager configuration (`daemon-reload`)    |
+
+Rendered `.socket` and `.timer` units, such as those for [on-demand services](https://foxws.nl/laravel-podman/ondemand), aren't Quadlets. `lpod install` copies them to `~/.config/systemd/user/` (or `/etc/systemd/system/` as root), along with the `.service` of the same name if it was rendered, and enables them. Pass `--replace` to overwrite installed ones. `lpod remove NAME.socket` disables and deletes them again.
 
 Every Quadlet management command except `reload` accepts the same extra flags as `podman quadlet` itself — things like `--replace`, `--application`, `--force`, or `--ignore`. The `secrets` command (see [Lifecycle](#lifecycle) above) also forwards extra flags, but to `podman secret create` instead.
 
