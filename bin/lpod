@@ -117,7 +117,8 @@ function display_help {
     echo "${YELLOW}Quadlet Management:${NC}"
     echo "  ${GREEN}lpod setup ...${NC}                         Alias for 'lpod-setup' (render presets without PHP on the host)"
     echo "  ${GREEN}lpod install PRESET/SERVICE.quadlets${NC}   Install a rendered quadlet (e.g. from 'podman:generate')"
-    echo "  ${GREEN}lpod remove NAME${NC}                       Remove an installed quadlet"
+    echo "  ${GREEN}lpod install PRESET/UNIT.socket${NC}        Install and enable a rendered systemd socket or timer (e.g. on-demand services)"
+    echo "  ${GREEN}lpod remove NAME${NC}                       Remove an installed quadlet, socket or timer"
     echo "  ${GREEN}lpod uninstall APPLICATION${NC}             Remove an application and all of its quadlets"
     echo "  ${GREEN}lpod list${NC}                               List installed quadlets"
     echo "  ${GREEN}lpod print NAME${NC}                        Print the generated systemd unit for a quadlet"
@@ -229,6 +230,80 @@ function cmd_secrets {
     done
 }
 
+# Installs a plain systemd unit rendered next to the quadlets, such as an
+# on-demand ".socket" or a ".timer" (used by "lpod install"). Quadlet only
+# handles container units, and "podman quadlet install" would put these
+# where systemd never loads them. The ".service" of the same name, if
+# rendered, is installed with it. Then the unit is enabled and started...
+function cmd_install_unit {
+    local SOURCE="${LPOD_PUBLISH_PATH}/$1"
+    shift
+
+    local REPLACE=0
+    local ARG
+
+    for ARG in "$@"; do
+        if [ "$ARG" == "--replace" ]; then
+            REPLACE=1
+        fi
+    done
+
+    if [ ! -f "$SOURCE" ]; then
+        echo "The file ${SOURCE} does not exist." >&2
+
+        return 1
+    fi
+
+    local FILES=("$SOURCE")
+
+    if [ -f "${SOURCE%.*}.service" ]; then
+        FILES+=("${SOURCE%.*}.service")
+    fi
+
+    local FILE
+
+    for FILE in "${FILES[@]}"; do
+        if [ -e "${SYSTEMD_UNIT_PATH}/$(basename "$FILE")" ] && [ "$REPLACE" -eq 0 ]; then
+            echo "${SYSTEMD_UNIT_PATH}/$(basename "$FILE") already exists. Use --replace to overwrite it." >&2
+
+            return 1
+        fi
+    done
+
+    mkdir -p "$SYSTEMD_UNIT_PATH" || return 1
+    cp "${FILES[@]}" "$SYSTEMD_UNIT_PATH/" || return 1
+
+    "${SYSTEMCTL_CMD[@]}" daemon-reload || return 1
+    "${SYSTEMCTL_CMD[@]}" enable --now "$(basename "$SOURCE")"
+}
+
+# Stops, disables and removes a unit installed by "cmd_install_unit", along
+# with the ".service" of the same name if it was installed with it (used by
+# "lpod remove")...
+function cmd_remove_unit {
+    local UNIT="$1"
+    local FILE="${SYSTEMD_UNIT_PATH}/${UNIT}"
+
+    if [ ! -f "$FILE" ]; then
+        echo "The unit ${UNIT} is not installed in ${SYSTEMD_UNIT_PATH}." >&2
+
+        return 1
+    fi
+
+    "${SYSTEMCTL_CMD[@]}" disable --now "$UNIT" || return 1
+
+    local SERVICE="${UNIT%.*}.service"
+
+    if [ -f "${SYSTEMD_UNIT_PATH}/${SERVICE}" ]; then
+        "${SYSTEMCTL_CMD[@]}" stop "$SERVICE"
+        rm -f "${SYSTEMD_UNIT_PATH}/${SERVICE}"
+    fi
+
+    rm -f "$FILE"
+
+    "${SYSTEMCTL_CMD[@]}" daemon-reload
+}
+
 # Where "podman:generate" wrote rendered ".quadlets" files, matching the
 # "publish_path" config key (default "podman")...
 export LPOD_PUBLISH_PATH=${LPOD_PUBLISH_PATH:-"podman"}
@@ -237,8 +312,10 @@ export LPOD_PUBLISH_PATH=${LPOD_PUBLISH_PATH:-"podman"}
 # per-user manager backing rootless Quadlet services...
 if [ "$(id -u)" -eq 0 ]; then
     SYSTEMCTL_CMD=(systemctl)
+    SYSTEMD_UNIT_PATH="/etc/systemd/system"
 else
     SYSTEMCTL_CMD=(systemctl --user)
+    SYSTEMD_UNIT_PATH="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
 fi
 
 # Show help when no service, or an explicit help flag, is given...
@@ -258,11 +335,27 @@ case "$1" in
     install)
         TARGET="$2"
         shift 2
+
+        case "$TARGET" in
+            *.socket|*.timer)
+                cmd_install_unit "$TARGET" "$@"
+                exit $?
+                ;;
+        esac
+
         exec "${LPOD_PODMAN_BINARY:-podman}" quadlet install "${LPOD_PUBLISH_PATH}/${TARGET}" "$@"
         ;;
 
     remove)
         shift
+
+        case "$1" in
+            *.socket|*.timer)
+                cmd_remove_unit "$1"
+                exit $?
+                ;;
+        esac
+
         exec "${LPOD_PODMAN_BINARY:-podman}" quadlet rm "$@"
         ;;
 
