@@ -122,4 +122,11 @@ Environment=LPOD_IDLE_WORKERS=imports
 
 The templates run `lpod` by its full path. After moving `lpod`, run `lpod idle setup` again.
 
+## Updating
+
+| Command                      | Description                                                         |
+| ----------------------------- | -------------------------------------------------------------------- |
+| `lpod self-update [VERSION]` | Upgrade `lpod` and `lpod-setup` in place, to the latest or the given release |
+| `lpod --version`             | Show the installed version                                          |
+
 > **Warning:** `remove` and `uninstall` delete the Podman volumes owned by the services they remove. This cannot be undone.

@@ -130,6 +130,10 @@ function display_help {
     echo "  ${GREEN}lpod idle disable APPLICATION${NC}   Stop running the idle check for the application"
     echo "  ${GREEN}lpod idle APPLICATION${NC}           Run the idle check once"
     echo "  ${GREEN}lpod idle setup${NC}                 Write the lpod-idle@ systemd templates (the installer runs this)"
+    echo
+    echo "${YELLOW}Updating:${NC}"
+    echo "  ${GREEN}lpod self-update [VERSION]${NC}      Upgrade lpod and lpod-setup in place (latest, or e.g. v2.2.0)"
+    echo "  ${GREEN}lpod --version${NC}                  Show the installed version"
 
     exit 1
 }
@@ -410,6 +414,30 @@ function cmd_idle {
     fi
 }
 
+# Re-runs the installer for this copy of lpod, so it upgrades in place
+# (used by "lpod self-update [VERSION]"). The installer verifies the
+# downloads against the release's SHA256SUMS...
+function cmd_self_update {
+    local TARGET="${1:-latest}"
+    local INSTALLER="https://github.com/foxws/lpod/releases/latest/download/install.sh"
+    local INSTALL_DIR
+    INSTALL_DIR="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
+
+    if [ "$TARGET" != "latest" ]; then
+        INSTALLER="https://github.com/foxws/lpod/releases/download/v${TARGET#v}/install.sh"
+    fi
+
+    if command -v curl >/dev/null 2>&1; then
+        curl -fsSL "$INSTALLER" | LPOD_INSTALL_DIR="$INSTALL_DIR" LPOD_VERSION="$TARGET" bash
+    elif command -v wget >/dev/null 2>&1; then
+        wget -qO- "$INSTALLER" | LPOD_INSTALL_DIR="$INSTALL_DIR" LPOD_VERSION="$TARGET" bash
+    else
+        echo "Neither curl nor wget is installed." >&2
+
+        return 1
+    fi
+}
+
 # Dispatches "lpod idle setup|enable|disable|APPLICATION"...
 function cmd_idle_dispatch {
     case "$1" in
@@ -521,6 +549,12 @@ case "$1" in
     idle)
         shift
         cmd_idle_dispatch "$@"
+        exit $?
+        ;;
+
+    self-update)
+        shift
+        cmd_self_update "$@"
         exit $?
         ;;
 esac

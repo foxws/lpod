@@ -11,7 +11,12 @@ Run the installer:
 curl -fsSL https://github.com/foxws/lpod/releases/latest/download/install.sh | bash
 ```
 
-It installs `lpod` and `lpod-setup` to `~/.local/bin` (`/usr/local/bin` as root) and writes the systemd templates for the [on-demand idle check](commands.md#on-demand-idle-check). It also offers to enable linger, so your services start at boot without logging in. Run it again to upgrade.
+It installs `lpod` and `lpod-setup` to `~/.local/bin` (`/usr/local/bin` as root) and writes the systemd templates for the [on-demand idle check](commands.md#on-demand-idle-check). It also offers to enable linger, so your services start at boot without logging in.
+
+The installer:
+- **Checks the downloads.** Each one is verified against the release's `SHA256SUMS` before anything is replaced. A failed download or checksum leaves your current install as it was.
+- **Warns about common setup problems.** It warns when `podman quadlet` isn't available (Podman 5.3 or later is needed), and when your user has no `/etc/subuid` or `/etc/subgid` range for rootless Podman.
+- **Never runs half a script.** Everything runs from the last line, so a download that's cut off doesn't run part of the installer.
 
 `lpod` is a single bash script with no other dependencies. It doesn't need PHP or Composer.
 
@@ -19,6 +24,23 @@ It installs `lpod` and `lpod-setup` to `~/.local/bin` (`/usr/local/bin` as root)
 | --- | --- | --- |
 | `LPOD_VERSION` | `latest` | The release to install, e.g. `v2.2.0` |
 | `LPOD_INSTALL_DIR` | `~/.local/bin`, or `/usr/local/bin` as root | Where to install the scripts |
+
+## Upgrading
+
+```sh
+lpod self-update            # the latest release
+lpod self-update v2.2.0     # or a specific one
+```
+
+`self-update` runs the installer again for the `lpod` you're running, so it upgrades in place. Running the `curl` command again does the same.
+
+## Uninstalling
+
+```sh
+curl -fsSL https://github.com/foxws/lpod/releases/latest/download/install.sh | bash -s -- --uninstall
+```
+
+This disables every app's idle check (`lpod-idle@*.timer`), then removes the templates, `lpod` and `lpod-setup`. Your services, secrets and volumes stay as they are. Remove those first with `lpod uninstall APPLICATION` if you want them gone too.
 
 ## Installing by hand
 

@@ -15,7 +15,7 @@ Pairs naturally with [foxws/laravel-podman](https://github.com/foxws/laravel-pod
 curl -fsSL https://github.com/foxws/lpod/releases/latest/download/install.sh | bash
 ```
 
-Installs `lpod` and `lpod-setup` to `~/.local/bin`; run it again to upgrade. Dependency-free single script — no PHP or Composer required. See [Installation](docs/installation.md) for pinning a release, installing by hand, and a shell alias.
+Installs `lpod` and `lpod-setup` to `~/.local/bin`, verified against the release's checksums. Upgrade with `lpod self-update`. Dependency-free single script — no PHP or Composer required. See [Installation](docs/installation.md) for pinning a release, installing by hand, and a shell alias.
 
 ## Usage
 
