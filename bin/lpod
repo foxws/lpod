@@ -397,14 +397,16 @@ function cmd_idle {
         return 0
     fi
 
+    # Queue the stops without waiting for them, so a worker's graceful
+    # shutdown (up to its TimeoutStopSec=) doesn't count against this run...
     for WORKER in "${WORKERS[@]}"; do
         if unit_is_active "${APPLICATION}-${WORKER}.service"; then
-            "${SYSTEMCTL_CMD[@]}" stop "${APPLICATION}-${WORKER}.service"
+            "${SYSTEMCTL_CMD[@]}" stop --no-block "${APPLICATION}-${WORKER}.service"
         fi
     done
 
     if unit_is_active "${APPLICATION}-schedule.timer"; then
-        "${SYSTEMCTL_CMD[@]}" stop "${APPLICATION}-schedule.timer"
+        "${SYSTEMCTL_CMD[@]}" stop --no-block "${APPLICATION}-schedule.timer"
     fi
 }
 
