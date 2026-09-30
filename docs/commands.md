@@ -96,4 +96,30 @@ If the same secret name is used more than once, `lpod` only asks for it once.
 
 For an `env` secret, leaving the value blank (just pressing Enter) skips it and keeps its current value untouched. This makes it easy to update a single secret with `lpod app secrets --replace` without having to re-enter every other one.
 
+## On-demand idle check
+
+| Command                         | Description                                                                 |
+| -------------------------------- | ---------------------------------------------------------------------------- |
+| `lpod idle enable APPLICATION`  | Run the idle check for the application every minute (`lpod-idle@APPLICATION.timer`) |
+| `lpod idle disable APPLICATION` | Stop running the idle check for the application                              |
+| `lpod idle APPLICATION`         | Run the idle check once                                                      |
+| `lpod idle setup`               | Write the `lpod-idle@.timer`/`lpod-idle@.service` templates. The installer runs it |
+
+An [on-demand](https://foxws.nl/laravel-podman/ondemand) app stops when it's idle, but its queue workers and scheduler timer keep running, and they keep the database and cache awake. The idle check stops them once the app has no work left. While the app is asleep, it:
+
+1. skips the run while the app, or a scheduled `schedule:run`, is running, and does nothing unless `APPLICATION-ondemand.socket` is active;
+2. runs `php artisan podman:idle` (from `foxws/laravel-podman`) in each running worker: `APPLICATION-queue`, `APPLICATION-horizon`, and any in `LPOD_IDLE_WORKERS`. If one reports work in progress, it keeps everything running;
+3. checks again that no request woke the app, then stops the workers and `APPLICATION-schedule.timer`.
+
+The next request starts them again through the app's `Wants=` line. See how a run went with `journalctl --user -u lpod-idle@APPLICATION`.
+
+To check and stop another worker, such as `my-app-imports`, add a drop-in with `systemctl --user edit lpod-idle@my-app.service`:
+
+```ini
+[Service]
+Environment=LPOD_IDLE_WORKERS=imports
+```
+
+The templates run `lpod` by its full path. After moving `lpod`, run `lpod idle setup` again.
+
 > **Warning:** `remove` and `uninstall` delete the Podman volumes owned by the services they remove. This cannot be undone.
