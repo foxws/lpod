@@ -124,6 +124,16 @@ function display_help {
     echo "  ${GREEN}lpod print NAME${NC}                        Print the generated systemd unit for a quadlet"
     echo "  ${GREEN}lpod reload${NC}                             Reload the systemd manager configuration (daemon-reload)"
     echo "  All of the above (except 'reload') accept any extra flags 'podman quadlet' itself takes (e.g. --replace, --application)."
+    echo
+    echo "${YELLOW}On-demand Idle Check:${NC}"
+    echo "  ${GREEN}lpod idle enable APPLICATION${NC}    Stop the queue workers and scheduler timer once the sleeping app has no work left"
+    echo "  ${GREEN}lpod idle disable APPLICATION${NC}   Stop running the idle check for the application"
+    echo "  ${GREEN}lpod idle APPLICATION${NC}           Run the idle check once"
+    echo "  ${GREEN}lpod idle setup${NC}                 Write the lpod-idle@ systemd templates (the installer runs this)"
+    echo
+    echo "${YELLOW}Updating:${NC}"
+    echo "  ${GREEN}lpod self-update [VERSION]${NC}      Upgrade lpod and lpod-setup in place (latest, or e.g. v2.2.0)"
+    echo "  ${GREEN}lpod --version${NC}                  Show the installed version"
 
     exit 1
 }
@@ -304,6 +314,163 @@ function cmd_remove_unit {
     "${SYSTEMCTL_CMD[@]}" daemon-reload
 }
 
+# Writes the "lpod-idle@.timer" and "lpod-idle@.service" templates, one
+# instance per on-demand application (used by "lpod idle setup"). The
+# service runs this script by its resolved path, since systemd's PATH
+# doesn't include "~/.local/bin"...
+function cmd_idle_setup {
+    local LPOD_PATH
+    LPOD_PATH="$(readlink -f "${BASH_SOURCE[0]}")"
+
+    mkdir -p "$SYSTEMD_UNIT_PATH" || return 1
+
+    cat > "${SYSTEMD_UNIT_PATH}/lpod-idle@.timer" <<'EOF' || return 1
+[Unit]
+Description=lpod idle check for %i
+
+[Timer]
+OnCalendar=*-*-* *:*:30
+AccuracySec=1s
+
+[Install]
+WantedBy=timers.target
+EOF
+
+    cat > "${SYSTEMD_UNIT_PATH}/lpod-idle@.service" <<EOF || return 1
+[Unit]
+Description=lpod idle check for %i
+
+[Service]
+Type=oneshot
+TimeoutStartSec=50
+ExecStart="${LPOD_PATH}" idle %i
+EOF
+
+    "${SYSTEMCTL_CMD[@]}" daemon-reload
+}
+
+# Checks whether a unit is active, in the same scope as the Quadlet units...
+function unit_is_active {
+    "${SYSTEMCTL_CMD[@]}" --quiet is-active "$1"
+}
+
+# Stops an on-demand application's queue workers and scheduler timer once
+# it's asleep and has no work in progress, so the services they keep awake
+# can sleep too (used by "lpod idle APPLICATION", which "lpod-idle@.service"
+# runs every minute). The app's "Wants=" line starts them again on the next
+# request. "LPOD_IDLE_WORKERS" adds workers beyond "queue" and "horizon",
+# e.g. from a drop-in: Environment=LPOD_IDLE_WORKERS=imports...
+function cmd_idle {
+    local APPLICATION="$1"
+    local WORKERS=(queue horizon)
+    local WORKER
+
+    # shellcheck disable=SC2206
+    WORKERS+=(${LPOD_IDLE_WORKERS:-})
+
+    # Only on-demand applications sleep; without the socket, the app runs all the time...
+    if ! unit_is_active "${APPLICATION}-ondemand.socket"; then
+        return 0
+    fi
+
+    if unit_is_active "${APPLICATION}.service"; then
+        return 0
+    fi
+
+    # A scheduled task still running may dispatch jobs that need a worker...
+    if unit_is_active "${APPLICATION}-schedule.service"; then
+        echo "The scheduler of ${APPLICATION} is still running."
+
+        return 0
+    fi
+
+    for WORKER in "${WORKERS[@]}"; do
+        if ! unit_is_active "${APPLICATION}-${WORKER}.service"; then
+            continue
+        fi
+
+        if ! "${LPOD_PODMAN_BINARY:-podman}" exec "systemd-${APPLICATION}-${WORKER}" php -d variables_order=EGPCS /app/artisan podman:idle; then
+            echo "${APPLICATION} has work in progress, keeping its workers running."
+
+            return 0
+        fi
+    done
+
+    # A request may have woken the app while "podman:idle" ran...
+    if unit_is_active "${APPLICATION}.service"; then
+        return 0
+    fi
+
+    # Queue the stops without waiting for them, so a worker's graceful
+    # shutdown (up to its TimeoutStopSec=) doesn't count against this run...
+    for WORKER in "${WORKERS[@]}"; do
+        if unit_is_active "${APPLICATION}-${WORKER}.service"; then
+            "${SYSTEMCTL_CMD[@]}" stop --no-block "${APPLICATION}-${WORKER}.service"
+        fi
+    done
+
+    if unit_is_active "${APPLICATION}-schedule.timer"; then
+        "${SYSTEMCTL_CMD[@]}" stop --no-block "${APPLICATION}-schedule.timer"
+    fi
+}
+
+# Re-runs the installer for this copy of lpod, so it upgrades in place
+# (used by "lpod self-update [VERSION]"). The installer verifies the
+# downloads against the release's SHA256SUMS...
+function cmd_self_update {
+    local TARGET="${1:-latest}"
+    local INSTALLER="https://github.com/foxws/lpod/releases/latest/download/install.sh"
+    local INSTALL_DIR
+    INSTALL_DIR="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
+
+    if [ "$TARGET" != "latest" ]; then
+        INSTALLER="https://github.com/foxws/lpod/releases/download/v${TARGET#v}/install.sh"
+    fi
+
+    if command -v curl >/dev/null 2>&1; then
+        curl -fsSL "$INSTALLER" | LPOD_INSTALL_DIR="$INSTALL_DIR" LPOD_VERSION="$TARGET" bash
+    elif command -v wget >/dev/null 2>&1; then
+        wget -qO- "$INSTALLER" | LPOD_INSTALL_DIR="$INSTALL_DIR" LPOD_VERSION="$TARGET" bash
+    else
+        echo "Neither curl nor wget is installed." >&2
+
+        return 1
+    fi
+}
+
+# Dispatches "lpod idle setup|enable|disable|APPLICATION"...
+function cmd_idle_dispatch {
+    case "$1" in
+        setup)
+            cmd_idle_setup
+            ;;
+
+        enable|disable)
+            if [ -z "$2" ]; then
+                echo "Usage: lpod idle $1 APPLICATION" >&2
+
+                return 1
+            fi
+
+            if [ "$1" == "enable" ] && [ ! -f "${SYSTEMD_UNIT_PATH}/lpod-idle@.service" ]; then
+                cmd_idle_setup || return 1
+            fi
+
+            "${SYSTEMCTL_CMD[@]}" "$1" --now "lpod-idle@$2.timer"
+            ;;
+
+        ""|-h|--help)
+            echo "Usage: lpod idle setup|enable APPLICATION|disable APPLICATION|APPLICATION" >&2
+
+            return 1
+            ;;
+
+        *)
+            cmd_idle "$1"
+            ;;
+    esac
+}
+
 # Where "podman:generate" wrote rendered ".quadlets" files, matching the
 # "publish_path" config key (default "podman")...
 export LPOD_PUBLISH_PATH=${LPOD_PUBLISH_PATH:-"podman"}
@@ -377,6 +544,18 @@ case "$1" in
     reload)
         shift
         exec "${SYSTEMCTL_CMD[@]}" daemon-reload "$@"
+        ;;
+
+    idle)
+        shift
+        cmd_idle_dispatch "$@"
+        exit $?
+        ;;
+
+    self-update)
+        shift
+        cmd_self_update "$@"
+        exit $?
         ;;
 esac
 

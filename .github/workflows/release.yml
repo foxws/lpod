@@ -18,17 +18,24 @@ jobs:
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
           sed -i "s/^LPOD_VERSION=\"dev\"\$/LPOD_VERSION=\"${VERSION}\"/" bin/lpod
-          chmod +x bin/lpod bin/lpod-setup
+          chmod +x bin/lpod bin/lpod-setup install.sh
           ./bin/lpod --version
+
+      - name: Collect the release assets and their checksums
+        run: |
+          mkdir dist
+          cp bin/lpod bin/lpod-setup install.sh dist/
+          (cd dist && sha256sum lpod lpod-setup install.sh > SHA256SUMS)
+          cat dist/SHA256SUMS
 
       - name: Create or update GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           if gh release view "${GITHUB_REF_NAME}" &>/dev/null; then
-            gh release upload "${GITHUB_REF_NAME}" bin/lpod bin/lpod-setup --clobber
+            gh release upload "${GITHUB_REF_NAME}" dist/* --clobber
           else
-            gh release create "${GITHUB_REF_NAME}" bin/lpod bin/lpod-setup \
+            gh release create "${GITHUB_REF_NAME}" dist/* \
               --title "${GITHUB_REF_NAME}" \
               --generate-notes
           fi
