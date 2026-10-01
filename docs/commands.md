@@ -25,7 +25,18 @@ This page lists every command `lpod` provides, grouped by what they do.
 | `lpod app php ...`           | Run PHP                                      |
 | `lpod app composer ...`      | Run Composer                                 |
 | `lpod app debug ARTISAN...` | Run an Artisan command with Xdebug enabled  |
+| `lpod app xdebug on [MODE]` | Turn Xdebug on for web requests and workers (default mode `debug`) |
+| `lpod app xdebug off`        | Turn Xdebug off again                        |
+| `lpod app xdebug status`     | Show whether Xdebug is on                    |
 | `lpod app tinker`             | Start a Tinker session                       |
+
+### Xdebug
+
+`lpod app debug` runs one Artisan command with `XDEBUG_MODE=debug` (or your `XDEBUG_MODE`) and `XDEBUG_TRIGGER=1`.
+
+For web requests, `lpod app xdebug on` writes a Quadlet drop-in, `~/.config/containers/systemd/app.container.d/lpod-xdebug.conf` (`/etc/containers/systemd/` as root), that sets `XDEBUG_MODE`. It then restarts the service if it's running. Pass a mode such as `debug,profile` to use another one. `lpod app xdebug off` removes the drop-in and restarts the service again.
+
+With `xdebug.start_with_request=trigger`, a session only starts for requests that carry `XDEBUG_TRIGGER` or `XDEBUG_SESSION`, e.g. from a browser extension. The image needs the Xdebug extension; `lpod` warns when it's missing.
 
 ## Node, npm, pnpm, Yarn & Bun
 
@@ -75,6 +86,7 @@ This page lists every command `lpod` provides, grouped by what they do.
 | `lpod setup ...`                       | Render presets without PHP on the host (needs `lpod-setup`, shipped alongside `lpod`) |
 | `lpod install PRESET/SERVICE.quadlets` | Install a rendered Quadlet                                   |
 | `lpod install PRESET/UNIT.socket`      | Install and enable a rendered systemd socket or timer        |
+| `lpod install devcontainer/CONFIG.json` | Copy a rendered devcontainer config to `.devcontainer/devcontainer.json` |
 | `lpod remove NAME`                     | Remove an installed Quadlet, socket or timer                 |
 | `lpod uninstall APPLICATION`           | Remove an application and all of its Quadlets                |
 | `lpod list`                            | List installed Quadlets                                      |
@@ -82,6 +94,8 @@ This page lists every command `lpod` provides, grouped by what they do.
 | `lpod reload`                          | Reload the systemd manager configuration (`daemon-reload`)    |
 
 Rendered `.socket` and `.timer` units, such as those for [on-demand services](https://foxws.nl/laravel-podman/ondemand), aren't Quadlets. `lpod install` copies them to `~/.config/systemd/user/` (or `/etc/systemd/system/` as root), along with the `.service` of the same name if it was rendered, and enables them. Pass `--replace` to overwrite installed ones. `lpod remove NAME.socket` disables and deletes them again.
+
+`lpod install devcontainer/devcontainer.json` copies one of the configs the `devcontainer` preset renders (`devcontainer.json`, `devcontainer-ai.json`, `devcontainer-local.json` or `devcontainer-local-ai.json`, from `podman/devcontainer/runtimes/`) to `.devcontainer/devcontainer.json`, where editors look for it. Pass `--replace` to overwrite an installed one, or to switch configs. Run it again after `podman:generate devcontainer`, then rebuild the container in your editor.
 
 Every Quadlet management command except `reload` accepts the same extra flags as `podman quadlet` itself — things like `--replace`, `--application`, `--force`, or `--ignore`. The `secrets` command (see [Lifecycle](#lifecycle) above) also forwards extra flags, but to `podman secret create` instead.
 
@@ -121,6 +135,24 @@ Environment=LPOD_IDLE_WORKERS=imports
 ```
 
 The templates run `lpod` by its full path. After moving `lpod`, run `lpod idle setup` again.
+
+## Troubleshooting
+
+| Command       | Description                                                          |
+| -------------- | ---------------------------------------------------------------------- |
+| `lpod doctor` | Check the host for what the services need, and how to fix what's missing |
+
+`lpod doctor` checks:
+
+- that Podman runs and has the `podman quadlet` command (Podman 5.6 or newer);
+- that the systemd manager is reachable;
+- for rootless services: linger, your entries in `/etc/subuid` and `/etc/subgid`, and whether containers may publish ports 80 and 443 for the proxy (`net.ipv4.ip_unprivileged_port_start`);
+- that the [idle check](#on-demand-idle-check)'s templates are installed;
+- that the host trusts the proxy's local certificate, when the proxy runs;
+- that the host in `APP_URL`, from the `.env` in the current directory, resolves;
+- that no services have failed.
+
+It changes nothing. It prints how to fix each problem, and the commands that need root are for you to run. It exits with an error when it finds something that stops the services from running, and succeeds on warnings.
 
 ## Updating
 

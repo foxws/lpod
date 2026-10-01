@@ -27,6 +27,7 @@ if test -t 1; then
 
     if test -n "$ncolors" && test "$ncolors" -ge 8; then
         BOLD="$(tput bold)"
+        RED="$(tput setaf 1)"
         YELLOW="$(tput setaf 3)"
         GREEN="$(tput setaf 2)"
         NC="$(tput sgr0)"
@@ -89,6 +90,9 @@ function display_help {
     echo "${YELLOW}Debugging:${NC}"
     echo "  ${GREEN}lpod my-app debug ...${NC}          Run an Artisan command in debug mode"
     echo "  ${GREEN}lpod my-app debug queue:work${NC}"
+    echo "  ${GREEN}lpod my-app xdebug on [MODE]${NC}   Turn Xdebug on for web requests (default mode: debug) and restart"
+    echo "  ${GREEN}lpod my-app xdebug off${NC}         Turn Xdebug off again and restart"
+    echo "  ${GREEN}lpod my-app xdebug status${NC}      Show whether Xdebug is on"
     echo
     echo "${YELLOW}Running Tests:${NC}"
     echo "  ${GREEN}lpod my-app test${NC}          Run the PHPUnit tests via the Artisan test command"
@@ -118,6 +122,7 @@ function display_help {
     echo "  ${GREEN}lpod setup ...${NC}                         Alias for 'lpod-setup' (render presets without PHP on the host)"
     echo "  ${GREEN}lpod install PRESET/SERVICE.quadlets${NC}   Install a rendered quadlet (e.g. from 'podman:generate')"
     echo "  ${GREEN}lpod install PRESET/UNIT.socket${NC}        Install and enable a rendered systemd socket or timer (e.g. on-demand services)"
+    echo "  ${GREEN}lpod install devcontainer/CONFIG.json${NC}  Copy a rendered devcontainer config to .devcontainer/devcontainer.json"
     echo "  ${GREEN}lpod remove NAME${NC}                       Remove an installed quadlet, socket or timer"
     echo "  ${GREEN}lpod uninstall APPLICATION${NC}             Remove an application and all of its quadlets"
     echo "  ${GREEN}lpod list${NC}                               List installed quadlets"
@@ -130,6 +135,9 @@ function display_help {
     echo "  ${GREEN}lpod idle disable APPLICATION${NC}   Stop running the idle check for the application"
     echo "  ${GREEN}lpod idle APPLICATION${NC}           Run the idle check once"
     echo "  ${GREEN}lpod idle setup${NC}                 Write the lpod-idle@ systemd templates (the installer runs this)"
+    echo
+    echo "${YELLOW}Troubleshooting:${NC}"
+    echo "  ${GREEN}lpod doctor${NC}                     Check the host for what the services need, and how to fix what's missing"
     echo
     echo "${YELLOW}Updating:${NC}"
     echo "  ${GREEN}lpod self-update [VERSION]${NC}      Upgrade lpod and lpod-setup in place (latest, or e.g. v2.2.0)"
@@ -438,6 +446,272 @@ function cmd_self_update {
     fi
 }
 
+# Copies a rendered devcontainer config, such as "devcontainer/devcontainer-ai.json",
+# to ".devcontainer/devcontainer.json", where editors look for it (used by
+# "lpod install"). A copy, unlike a symlink, keeps working when the rendered
+# output is cleaned up, and its relative build paths resolve the same way...
+function cmd_install_devcontainer {
+    local SOURCE="${LPOD_PUBLISH_PATH}/$1"
+    local TARGET=".devcontainer/devcontainer.json"
+    shift
+
+    local REPLACE=0
+    local ARG
+
+    for ARG in "$@"; do
+        if [ "$ARG" == "--replace" ] || [ "$ARG" == "-r" ]; then
+            REPLACE=1
+        fi
+    done
+
+    # The configs are rendered into the preset's "runtimes" folder, which
+    # "devcontainer/devcontainer.json" may leave out...
+    if [ ! -f "$SOURCE" ] && [ -f "$(dirname "$SOURCE")/runtimes/$(basename "$SOURCE")" ]; then
+        SOURCE="$(dirname "$SOURCE")/runtimes/$(basename "$SOURCE")"
+    fi
+
+    if [ ! -f "$SOURCE" ]; then
+        echo "The file ${SOURCE} does not exist. Run \"php artisan podman:generate devcontainer\" first." >&2
+
+        return 1
+    fi
+
+    if { [ -e "$TARGET" ] || [ -L "$TARGET" ]; } && [ "$REPLACE" -eq 0 ]; then
+        echo "${TARGET} already exists. Use --replace to overwrite it." >&2
+
+        return 1
+    fi
+
+    mkdir -p .devcontainer || return 1
+    rm -f "$TARGET"
+    cp "$SOURCE" "$TARGET" || return 1
+
+    echo "Installed ${SOURCE} to ${TARGET}. Rebuild the container in your editor to apply it."
+}
+
+# Prints a doctor check's outcome, with how to fix it on the next line...
+function doctor_report {
+    local STATUS="$1"
+    local MESSAGE="$2"
+    local FIX="${3:-}"
+
+    case "$STATUS" in
+        ok) echo "  ${GREEN}✓${NC} ${MESSAGE}" ;;
+        warn) echo "  ${YELLOW}!${NC} ${MESSAGE}"; DOCTOR_WARNINGS=$((DOCTOR_WARNINGS + 1)) ;;
+        fail) echo "  ${RED}✗${NC} ${MESSAGE}"; DOCTOR_FAILURES=$((DOCTOR_FAILURES + 1)) ;;
+    esac
+
+    if [ -n "$FIX" ] && [ "$STATUS" != "ok" ]; then
+        local LINE
+
+        while IFS= read -r LINE; do
+            echo "      ${LINE}"
+        done <<< "$FIX"
+    fi
+}
+
+# Checks the host for what the services need, and prints how to fix what's
+# missing without changing anything itself, since most fixes need root
+# (used by "lpod doctor"). Fails when something stops services from running...
+function cmd_doctor {
+    local PODMAN="${LPOD_PODMAN_BINARY:-podman}"
+    local USER_NAME
+    USER_NAME="$(id -un)"
+
+    DOCTOR_WARNINGS=0
+    DOCTOR_FAILURES=0
+
+    echo "${BOLD}lpod ${LPOD_VERSION} doctor${NC}"
+    echo
+
+    # Podman with Quadlet...
+    local VERSION
+
+    if ! VERSION="$("$PODMAN" version --format '{{.Client.Version}}' 2>/dev/null)"; then
+        doctor_report fail "Podman isn't installed, or doesn't run" "Install podman from your distribution's packages."
+    elif ! "$PODMAN" quadlet --help >/dev/null 2>&1; then
+        doctor_report fail "Podman ${VERSION} has no \"podman quadlet\" command" "Upgrade to Podman 5.6 or newer."
+    else
+        doctor_report ok "Podman ${VERSION} with Quadlet"
+    fi
+
+    # The systemd manager that runs the Quadlet units...
+    if "${SYSTEMCTL_CMD[@]}" show-environment >/dev/null 2>&1; then
+        doctor_report ok "The systemd ${SYSTEMD_SCOPE} manager is reachable"
+    else
+        doctor_report fail "The systemd ${SYSTEMD_SCOPE} manager isn't reachable" "Log in through a real session (not \"su\" or \"sudo -u\"), or use \"machinectl shell ${USER_NAME}@\"."
+    fi
+
+    if [ "$(id -u)" -ne 0 ]; then
+        # Rootless services only start at boot, and keep running after logout, with linger...
+        if [ "$(loginctl show-user "$USER_NAME" --property=Linger --value 2>/dev/null)" == "yes" ]; then
+            doctor_report ok "Linger is on, so services start at boot"
+        else
+            doctor_report warn "Linger is off, so services stop when you log out and don't start at boot" "loginctl enable-linger ${USER_NAME}"
+        fi
+
+        # Rootless containers map their users onto subordinate IDs...
+        local ID_FILE
+        local MISSING_IDS=()
+
+        for ID_FILE in /etc/subuid /etc/subgid; do
+            if ! grep -qE "^(${USER_NAME}|$(id -u)):" "$ID_FILE" 2>/dev/null; then
+                MISSING_IDS+=("$ID_FILE")
+            fi
+        done
+
+        if [ ${#MISSING_IDS[@]} -eq 0 ]; then
+            doctor_report ok "Subordinate user and group IDs are set up"
+        else
+            doctor_report fail "${USER_NAME} has no entry in ${MISSING_IDS[*]}" "sudo usermod --add-subuids 100000-165535 --add-subgids 100000-165535 ${USER_NAME}
+podman system migrate"
+        fi
+
+        # The proxy publishes ports 80 and 443, which are privileged by default...
+        local PORT_START
+        PORT_START="$(cat /proc/sys/net/ipv4/ip_unprivileged_port_start 2>/dev/null)"
+
+        if [ -z "$PORT_START" ] || [ "$PORT_START" -le 80 ]; then
+            doctor_report ok "Rootless containers may publish ports 80 and 443"
+        else
+            doctor_report warn "Rootless containers can't publish ports below ${PORT_START}, which the proxy's 80 and 443 are" "echo 'net.ipv4.ip_unprivileged_port_start=80' | sudo tee /etc/sysctl.d/99-lpod.conf
+sudo sysctl --system"
+        fi
+    fi
+
+    # The idle check's templates, which the installer writes...
+    if [ -f "${SYSTEMD_UNIT_PATH}/lpod-idle@.service" ] && [ -f "${SYSTEMD_UNIT_PATH}/lpod-idle@.timer" ]; then
+        doctor_report ok "The idle check's systemd templates are installed"
+    else
+        doctor_report warn "The idle check's systemd templates are missing, so on-demand apps keep their workers running" "lpod idle setup"
+    fi
+
+    # The proxy's local CA, which browsers and the host only accept once trusted...
+    if [ "$("$PODMAN" container inspect --format '{{.State.Running}}' systemd-proxy 2>/dev/null)" == "true" ] && command -v openssl >/dev/null 2>&1; then
+        local CERTIFICATE
+        CERTIFICATE="$(mktemp)"
+
+        if "$PODMAN" cp systemd-proxy:/data/caddy/pki/authorities/local/root.crt "$CERTIFICATE" 2>/dev/null; then
+            if openssl verify "$CERTIFICATE" >/dev/null 2>&1; then
+                doctor_report ok "The proxy's local certificate is trusted"
+            else
+                doctor_report warn "The proxy's local certificate isn't trusted by this host" "lpod proxy export-cert, then add ~/proxy.crt to your trust store:
+https://foxws.nl/laravel-podman/proxy#trusting-the-local-certificate"
+            fi
+        fi
+
+        rm -f "$CERTIFICATE"
+    fi
+
+    # The app's host name, read from the ".env" in the current directory...
+    local APP_HOST=""
+
+    if [ -f .env ]; then
+        APP_HOST="$(sed -nE 's/^APP_URL=["'\'']?([a-z]+:\/\/)?([^:\/"'\'']+).*/\2/p' .env | tail -n 1)"
+    fi
+
+    if [ -n "$APP_HOST" ]; then
+        if getent hosts "$APP_HOST" >/dev/null 2>&1; then
+            doctor_report ok "${APP_HOST} (APP_URL) resolves"
+        else
+            doctor_report warn "${APP_HOST} (APP_URL) doesn't resolve" "Add it, and its subdomains, to /etc/hosts:
+https://foxws.nl/laravel-podman/proxy#dns"
+        fi
+    fi
+
+    # Services that failed and stay down until someone looks...
+    local FAILED
+    FAILED="$("${SYSTEMCTL_CMD[@]}" list-units --failed --plain --no-legend --type=service 2>/dev/null | awk '{ print $1 }')"
+
+    if [ -z "$FAILED" ]; then
+        doctor_report ok "No services have failed"
+    else
+        doctor_report warn "These services have failed: $(echo "$FAILED" | paste -sd ' ')" "See why with: journalctl ${SYSTEMD_JOURNAL_SCOPE}-u SERVICE -e"
+    fi
+
+    echo
+
+    if [ "$DOCTOR_FAILURES" -gt 0 ]; then
+        echo "${DOCTOR_FAILURES} problem(s) and ${DOCTOR_WARNINGS} warning(s) found."
+
+        return 1
+    fi
+
+    if [ "$DOCTOR_WARNINGS" -gt 0 ]; then
+        echo "No problems, ${DOCTOR_WARNINGS} warning(s) found."
+    else
+        echo "Everything looks good."
+    fi
+}
+
+# Where Quadlet looks for the units "podman quadlet install" installs, and
+# their drop-ins...
+function quadlet_unit_path {
+    if [ "$(id -u)" -eq 0 ]; then
+        echo "/etc/containers/systemd"
+    else
+        echo "${XDG_CONFIG_HOME:-$HOME/.config}/containers/systemd"
+    fi
+}
+
+# Turns Xdebug on (in MODE, default "debug") or off for a service's web
+# requests and workers, with a Quadlet drop-in that sets XDEBUG_MODE, then
+# restarts the service if it's running (used by "lpod SERVICE xdebug")...
+function cmd_xdebug {
+    local SERVICE="$1"
+    local ACTION="${2:-status}"
+    local MODE="${3:-debug}"
+    local DROPIN_PATH
+    DROPIN_PATH="$(quadlet_unit_path)/${SERVICE}.container.d"
+    local DROPIN="${DROPIN_PATH}/lpod-xdebug.conf"
+
+    case "$ACTION" in
+        on)
+            mkdir -p "$DROPIN_PATH" || return 1
+            printf '[Container]\nEnvironment=XDEBUG_MODE=%s\n' "$MODE" > "$DROPIN" || return 1
+            ;;
+
+        off)
+            rm -f "$DROPIN"
+            rmdir "$DROPIN_PATH" 2>/dev/null
+            ;;
+
+        status)
+            if [ -f "$DROPIN" ]; then
+                echo "Xdebug is on for ${SERVICE} ($(sed -n 's/^Environment=XDEBUG_MODE=//p' "$DROPIN"))."
+            else
+                echo "Xdebug is off for ${SERVICE}."
+            fi
+
+            return 0
+            ;;
+
+        *)
+            echo "Usage: lpod ${SERVICE} xdebug on [MODE]|off|status" >&2
+
+            return 1
+            ;;
+    esac
+
+    "${SYSTEMCTL_CMD[@]}" daemon-reload || return 1
+
+    if unit_is_active "${SERVICE}.service"; then
+        "${SYSTEMCTL_CMD[@]}" restart "${SERVICE}.service" || return 1
+    fi
+
+    if [ "$ACTION" == "off" ]; then
+        echo "Xdebug is off for ${SERVICE}."
+
+        return 0
+    fi
+
+    echo "Xdebug is on for ${SERVICE} (${MODE}). Add XDEBUG_TRIGGER (or XDEBUG_SESSION) to a request to start a session."
+
+    if unit_is_active "${SERVICE}.service" && ! "${LPOD_PODMAN_BINARY:-podman}" exec "systemd-${SERVICE}" php -m 2>/dev/null | grep -qi '^xdebug$'; then
+        echo "${YELLOW}The ${SERVICE} image has no Xdebug extension.${NC} Update its Containerfile to install it, and rebuild." >&2
+    fi
+}
+
 # Dispatches "lpod idle setup|enable|disable|APPLICATION"...
 function cmd_idle_dispatch {
     case "$1" in
@@ -480,9 +754,13 @@ export LPOD_PUBLISH_PATH=${LPOD_PUBLISH_PATH:-"podman"}
 if [ "$(id -u)" -eq 0 ]; then
     SYSTEMCTL_CMD=(systemctl)
     SYSTEMD_UNIT_PATH="/etc/systemd/system"
+    SYSTEMD_SCOPE="system"
+    SYSTEMD_JOURNAL_SCOPE=""
 else
     SYSTEMCTL_CMD=(systemctl --user)
     SYSTEMD_UNIT_PATH="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
+    SYSTEMD_SCOPE="user"
+    SYSTEMD_JOURNAL_SCOPE="--user "
 fi
 
 # Show help when no service, or an explicit help flag, is given...
@@ -506,6 +784,11 @@ case "$1" in
         case "$TARGET" in
             *.socket|*.timer)
                 cmd_install_unit "$TARGET" "$@"
+                exit $?
+                ;;
+
+            devcontainer*.json|*/devcontainer*.json)
+                cmd_install_devcontainer "$TARGET" "$@"
                 exit $?
                 ;;
         esac
@@ -549,6 +832,11 @@ case "$1" in
     idle)
         shift
         cmd_idle_dispatch "$@"
+        exit $?
+        ;;
+
+    doctor)
+        cmd_doctor
         exit $?
         ;;
 
@@ -703,9 +991,15 @@ case "$COMMAND" in
 
     # Proxy the "debug" command to "php artisan" on the service container with xdebug enabled...
     debug)
-        ARGS+=(exec "${APP_USER_ARGS[@]}" -e XDEBUG_TRIGGER=1 "${TTY_ARGS[@]}")
+        ARGS+=(exec "${APP_USER_ARGS[@]}" -e "XDEBUG_MODE=${XDEBUG_MODE:-debug}" -e XDEBUG_TRIGGER=1 "${TTY_ARGS[@]}")
         forward_agent_env
         ARGS+=("$CONTAINER" php artisan)
+        ;;
+
+    # Turn Xdebug on or off for the service's requests and workers...
+    xdebug)
+        cmd_xdebug "$SERVICE" "$@"
+        exit $?
         ;;
 
     # Proxy the "test" command to the "php artisan test" Artisan command...
