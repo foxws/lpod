@@ -86,7 +86,6 @@ With `xdebug.start_with_request=trigger`, a session only starts for requests tha
 | `lpod setup ...`                       | Render presets without PHP on the host (needs `lpod-setup`, shipped alongside `lpod`) |
 | `lpod install PRESET/SERVICE.quadlets` | Install a rendered Quadlet                                   |
 | `lpod install PRESET/UNIT.socket`      | Install and enable a rendered systemd socket or timer        |
-| `lpod install devcontainer/CONFIG.json` | Copy a rendered devcontainer config to `.devcontainer/devcontainer.json` |
 | `lpod remove NAME`                     | Remove an installed Quadlet, socket or timer                 |
 | `lpod uninstall APPLICATION`           | Remove an application and all of its Quadlets                |
 | `lpod list`                            | List installed Quadlets                                      |
@@ -94,8 +93,6 @@ With `xdebug.start_with_request=trigger`, a session only starts for requests tha
 | `lpod reload`                          | Reload the systemd manager configuration (`daemon-reload`)    |
 
 Rendered `.socket` and `.timer` units, such as those for [on-demand services](https://foxws.nl/laravel-podman/ondemand), aren't Quadlets. `lpod install` copies them to `~/.config/systemd/user/` (or `/etc/systemd/system/` as root), along with the `.service` of the same name if it was rendered, and enables them. Pass `--replace` to overwrite installed ones. `lpod remove NAME.socket` disables and deletes them again.
-
-`lpod install devcontainer/devcontainer.json` copies one of the configs the `devcontainer` preset renders (`devcontainer.json`, `devcontainer-ai.json`, `devcontainer-local.json` or `devcontainer-local-ai.json`, from `podman/devcontainer/runtimes/`) to `.devcontainer/devcontainer.json`, where editors look for it. Pass `--replace` to overwrite an installed one, or to switch configs. Run it again after `podman:generate devcontainer`, then rebuild the container in your editor.
 
 Every Quadlet management command except `reload` accepts the same extra flags as `podman quadlet` itself — things like `--replace`, `--application`, `--force`, or `--ignore`. The `secrets` command (see [Lifecycle](#lifecycle) above) also forwards extra flags, but to `podman secret create` instead.
 
