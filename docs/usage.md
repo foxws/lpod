@@ -13,7 +13,7 @@ lpod SERVICE COMMAND [options] [arguments]
 
 `SERVICE` is the name of a Quadlet service — your app, or a sibling service like `pgsql`.
 
-A few commands manage Quadlets themselves instead of talking to a running service, so they skip the `SERVICE` name: `setup`, `install`, `remove`, `uninstall`, `list`, `print`, and `reload`.
+A few commands manage Quadlets themselves instead of talking to a running service, so they skip the `SERVICE` name: `setup`, `install`, `remove`, `uninstall`, `list`, `print`, `reload`, `idle`, `doctor` and `self-update`.
 
 ## Container naming
 
