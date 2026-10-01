@@ -51,6 +51,9 @@ function display_help {
     echo "  ${GREEN}lpod my-app status${NC}    Show the status of the 'my-app' service"
     echo "  ${GREEN}lpod my-app secrets${NC}   Parse and set the secrets the installed 'my-app' quadlet needs"
     echo
+    echo "${YELLOW}Database Commands:${NC}"
+    echo "  ${GREEN}lpod my-app-pgsql client ...${NC}   Open the database's client (psql, mysql, mariadb or mongosh)"
+    echo
     echo "${YELLOW}Artisan Commands:${NC}"
     echo "  ${GREEN}lpod my-app artisan ...${NC}          Run an Artisan command"
     echo "  ${GREEN}lpod my-app artisan queue:work${NC}"
@@ -438,6 +441,46 @@ function cmd_self_update {
     fi
 }
 
+# Opens a database service's own client (psql, mysql, mariadb or mongosh),
+# picked by its container's image and logged in with the credentials in the
+# container's environment, so it works with plain values and Podman secrets
+# alike (used by "lpod SERVICE client")...
+function cmd_db_client {
+    local SERVICE="$1"
+    shift
+
+    local IMAGE
+
+    if ! IMAGE="$("${LPOD_PODMAN_BINARY}" container inspect --format '{{.ImageName}}' "systemd-${SERVICE}" 2>/dev/null)"; then
+        echo "${SERVICE} isn't running. Start it, or the app that needs it (e.g. \"lpod my-app up\"), first." >&2
+
+        return 1
+    fi
+
+    IMAGE="${IMAGE##*/}"
+
+    local SCRIPT
+
+    # shellcheck disable=SC2016
+    case "${IMAGE%%[:@]*}" in
+        postgres|postgis|pgvector)
+            SCRIPT='exec psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" "$@"' ;;
+        mysql|percona-server)
+            SCRIPT='export MYSQL_PWD="$MYSQL_ROOT_PASSWORD"; exec mysql -uroot "$@" "$MYSQL_DATABASE"' ;;
+        mariadb)
+            SCRIPT='export MYSQL_PWD="${MARIADB_ROOT_PASSWORD:-$MYSQL_ROOT_PASSWORD}"; exec mariadb -uroot "$@" "${MARIADB_DATABASE:-$MYSQL_DATABASE}"' ;;
+        mongo)
+            SCRIPT='exec mongosh -u "$MONGO_INITDB_ROOT_USERNAME" -p "$MONGO_INITDB_ROOT_PASSWORD" --authenticationDatabase admin "$@"' ;;
+        *)
+            echo "${SERVICE} isn't a PostgreSQL, MySQL, MariaDB or MongoDB service." >&2
+
+            return 1
+            ;;
+    esac
+
+    "${LPOD_PODMAN_BINARY}" exec "${TTY_ARGS[@]}" "systemd-${SERVICE}" sh -c "$SCRIPT" sh "$@"
+}
+
 # Dispatches "lpod idle setup|enable|disable|APPLICATION"...
 function cmd_idle_dispatch {
     case "$1" in
@@ -659,6 +702,12 @@ case "$COMMAND" in
     # Parse and set the secrets an installed quadlet needs...
     secrets)
         cmd_secrets "$SERVICE" "$@"
+        exit $?
+        ;;
+
+    # Open a database service's own client...
+    client)
+        cmd_db_client "$SERVICE" "$@"
         exit $?
         ;;
 

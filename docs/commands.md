@@ -17,6 +17,19 @@ This page lists every command `lpod` provides, grouped by what they do.
 | `lpod app status`  | Show the service's status                         |
 | `lpod app secrets` | Prompt for and set the service's Quadlet secrets  |
 
+## Databases
+
+| Command                          | Description                                                           |
+| --------------------------------- | ----------------------------------------------------------------------- |
+| `lpod my-app-pgsql client ...` | Open the database's client (`psql`, `mysql`, `mariadb` or `mongosh`) |
+
+`client` works on running PostgreSQL, MySQL, MariaDB and MongoDB services, such as `my-app-pgsql`. `lpod` tells them apart by their image, and logs in with the credentials in the container's own environment, so it works with plain values and Podman secrets alike. Extra arguments go to the client:
+
+```bash
+lpod my-app-pgsql client -c 'select count(*) from users'
+lpod my-app-mysql client -e 'show tables'
+```
+
 ## Artisan, PHP & Composer
 
 | Command                     | Description                                 |
