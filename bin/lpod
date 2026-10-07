@@ -361,6 +361,15 @@ function unit_is_active {
     "${SYSTEMCTL_CMD[@]}" --quiet is-active "$1"
 }
 
+# Checks whether a unit is running or on its way up. "is-active" fails while
+# a unit is still "activating", e.g. an app waiting for its health check...
+function unit_is_awake {
+    case "$("${SYSTEMCTL_CMD[@]}" is-active "$1")" in
+        inactive | failed) return 1 ;;
+        *) return 0 ;;
+    esac
+}
+
 # Stops an on-demand application's queue workers and scheduler timer once
 # it's asleep and has no work in progress, so the services they keep awake
 # can sleep too (used by "lpod idle APPLICATION", which "lpod-idle@.service"
@@ -380,7 +389,7 @@ function cmd_idle {
         return 0
     fi
 
-    if unit_is_active "${APPLICATION}.service"; then
+    if unit_is_awake "${APPLICATION}.service"; then
         return 0
     fi
 
@@ -404,7 +413,7 @@ function cmd_idle {
     done
 
     # A request may have woken the app while "podman:idle" ran...
-    if unit_is_active "${APPLICATION}.service"; then
+    if unit_is_awake "${APPLICATION}.service"; then
         return 0
     fi
 
