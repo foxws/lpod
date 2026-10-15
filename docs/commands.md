@@ -167,6 +167,25 @@ It changes nothing. It prints how to fix each problem, and the commands that nee
 
 The ids are `podman`, `systemd`, `linger`, `subids`, `ports`, `idle-templates`, `proxy-certificate`, `app-url` and `failed-services`. Checks that don't apply, such as the rootless ones when running as root, are left out.
 
+## Installing apps
+
+| Command                 | Description                                                                  |
+| ----------------------- | ---------------------------------------------------------------------------- |
+| `lpod installer IMAGE`  | Start a one-time installer image, such as an app's installer built on [podman-installer](https://github.com/foxws/podman-installer) |
+
+```bash
+lpod installer ghcr.io/francoism90/stry-installer
+```
+
+`lpod installer`:
+
+- starts `podman.socket` when it isn't running, since the installer runs the app's commands through it;
+- runs `lpod doctor --json` and passes the report in, so the installer can show the full host check;
+- starts the image with `--rm`, so nothing is left behind once you stop it with Ctrl+C, and pulls a newer version of it first;
+- listens on `127.0.0.1:8085` only. On a server, reach it through `ssh -L 8085:127.0.0.1:8085 SERVER`. Pass `--port` for another port, or `--listen 0.0.0.0` to open it to the network: then anyone who can reach it and gets the link can install apps as you.
+
+The installer prints a link that works once. Open it in your browser.
+
 ## Updating
 
 | Command                      | Description                                                         |

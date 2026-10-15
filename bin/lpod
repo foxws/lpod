@@ -138,6 +138,9 @@ function display_help {
     echo "${YELLOW}Troubleshooting:${NC}"
     echo "  ${GREEN}lpod doctor [--json]${NC}            Check the host for what the services need, and how to fix what's missing"
     echo
+    echo "${YELLOW}Installing Apps:${NC}"
+    echo "  ${GREEN}lpod installer IMAGE${NC}            Start a one-time installer image on 127.0.0.1:8085 (--listen, --port), removed when stopped"
+    echo
     echo "${YELLOW}Updating:${NC}"
     echo "  ${GREEN}lpod self-update [VERSION]${NC}      Upgrade lpod and lpod-setup in place (latest, or e.g. v2.2.0)"
     echo "  ${GREEN}lpod --version${NC}                  Show the installed version"
@@ -665,6 +668,86 @@ https://foxws.nl/laravel-podman/proxy#dns"
     fi
 }
 
+# Starts a one-time installer image, such as an app's "*-installer" image
+# from foxws/podman-installer, with the host checks of "lpod doctor --json"
+# and the Podman socket it runs the app's commands through. It listens on
+# 127.0.0.1 only, and the container is removed once you stop it...
+function cmd_installer {
+    local IMAGE=""
+    local LISTEN="127.0.0.1"
+    local PORT="8085"
+
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --listen) LISTEN="$2"; shift 2 ;;
+            --listen=*) LISTEN="${1#*=}"; shift ;;
+            --port) PORT="$2"; shift 2 ;;
+            --port=*) PORT="${1#*=}"; shift ;;
+            -*)
+                echo "Unknown option: $1. Usage: lpod installer IMAGE [--listen ADDRESS] [--port PORT]" >&2
+
+                return 1
+                ;;
+            *) IMAGE="$1"; shift ;;
+        esac
+    done
+
+    if [ -z "$IMAGE" ]; then
+        echo "Usage: lpod installer IMAGE [--listen ADDRESS] [--port PORT]" >&2
+
+        return 1
+    fi
+
+    # The installer runs the app's commands through the Podman socket...
+    local SOCKET="/run/podman/podman.sock"
+
+    if [ "$(id -u)" -ne 0 ]; then
+        SOCKET="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/podman/podman.sock"
+    fi
+
+    if [ ! -S "$SOCKET" ]; then
+        echo "Starting the Podman socket (podman.socket) for the installer..."
+
+        "${SYSTEMCTL_CMD[@]}" start podman.socket || return 1
+    fi
+
+    # The host checks, which the installer can't make from inside its container...
+    local REPORT
+    REPORT="$(mktemp)"
+    chmod 644 "$REPORT"
+
+    # shellcheck disable=SC2064
+    trap "rm -f '$REPORT'" RETURN
+
+    cmd_doctor --json > "$REPORT" || true
+
+    if [ "$LISTEN" != "127.0.0.1" ] && [ "$LISTEN" != "localhost" ]; then
+        echo "${YELLOW}The installer will listen on ${LISTEN}:${PORT}. Anyone who can reach it and gets the link can install apps as you.${NC}"
+    fi
+
+    # The link the installer prints must work in a browser...
+    local URL_HOST="$LISTEN"
+
+    if [ "$LISTEN" == "0.0.0.0" ] || [ "$LISTEN" == "::" ]; then
+        URL_HOST="$(hostname -f 2>/dev/null || hostname)"
+    fi
+
+    local TTY=()
+
+    if [ -t 0 ] && [ -t 1 ]; then
+        TTY=(--interactive --tty)
+    fi
+
+    "${LPOD_PODMAN_BINARY:-podman}" run --rm "${TTY[@]}" \
+        --pull=newer \
+        --publish "${LISTEN}:${PORT}:8085" \
+        --env "APP_URL=http://${URL_HOST}:${PORT}" \
+        --volume "${SOCKET}:/run/podman/podman.sock" \
+        --volume "${REPORT}:/run/installer/doctor.json:ro" \
+        --security-opt label=disable \
+        "$IMAGE"
+}
+
 # Where Quadlet looks for the units "podman quadlet install" installs, and
 # their drop-ins...
 function quadlet_unit_path {
@@ -854,6 +937,12 @@ case "$1" in
     doctor)
         shift
         cmd_doctor "$@"
+        exit $?
+        ;;
+
+    installer)
+        shift
+        cmd_installer "$@"
         exit $?
         ;;
 
