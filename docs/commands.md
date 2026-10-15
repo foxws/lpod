@@ -137,7 +137,7 @@ The templates run `lpod` by its full path. After moving `lpod`, run `lpod idle s
 
 | Command       | Description                                                          |
 | -------------- | ---------------------------------------------------------------------- |
-| `lpod doctor` | Check the host for what the services need, and how to fix what's missing |
+| `lpod doctor [--json]` | Check the host for what the services need, and how to fix what's missing |
 
 `lpod doctor` checks:
 
@@ -150,6 +150,22 @@ The templates run `lpod` by its full path. After moving `lpod`, run `lpod idle s
 - that no services have failed.
 
 It changes nothing. It prints how to fix each problem, and the commands that need root are for you to run. It exits with an error when it finds something that stops the services from running, and succeeds on warnings.
+
+`lpod doctor --json` prints the same checks as JSON, for installers and other tools to read. Each check has a stable `id`, a `status` (`ok`, `warn` or `fail`), a `message` and a `fix`, which is empty for passing checks. The exit code is the same:
+
+```json
+{
+  "lpod": "2.3.0",
+  "failures": 0,
+  "warnings": 1,
+  "checks": [
+    { "id": "podman", "status": "ok", "message": "Podman 5.6.1 with Quadlet", "fix": "" },
+    { "id": "linger", "status": "warn", "message": "Linger is off, so services stop when you log out and don't start at boot", "fix": "loginctl enable-linger me" }
+  ]
+}
+```
+
+The ids are `podman`, `systemd`, `linger`, `subids`, `ports`, `idle-templates`, `proxy-certificate`, `app-url` and `failed-services`. Checks that don't apply, such as the rootless ones when running as root, are left out.
 
 ## Updating
 
