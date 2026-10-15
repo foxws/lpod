@@ -136,7 +136,7 @@ function display_help {
     echo "  ${GREEN}lpod idle setup${NC}                 Write the lpod-idle@ systemd templates (the installer runs this)"
     echo
     echo "${YELLOW}Troubleshooting:${NC}"
-    echo "  ${GREEN}lpod doctor${NC}                     Check the host for what the services need, and how to fix what's missing"
+    echo "  ${GREEN}lpod doctor [--json]${NC}            Check the host for what the services need, and how to fix what's missing"
     echo
     echo "${YELLOW}Updating:${NC}"
     echo "  ${GREEN}lpod self-update [VERSION]${NC}      Upgrade lpod and lpod-setup in place (latest, or e.g. v2.2.0)"
@@ -454,16 +454,46 @@ function cmd_self_update {
     fi
 }
 
-# Prints a doctor check's outcome, with how to fix it on the next line...
+# Prints a string as a JSON string, escaping what JSON doesn't allow as is...
+function json_string {
+    local VALUE="$1"
+
+    VALUE="${VALUE//\\/\\\\}"
+    VALUE="${VALUE//\"/\\\"}"
+    VALUE="${VALUE//$'\n'/\\n}"
+    VALUE="${VALUE//$'\r'/\\r}"
+    VALUE="${VALUE//$'\t'/\\t}"
+
+    printf '"%s"' "$VALUE"
+}
+
+# Prints a doctor check's outcome, with how to fix it on the next line, or
+# collects it for "lpod doctor --json"...
 function doctor_report {
     local STATUS="$1"
-    local MESSAGE="$2"
-    local FIX="${3:-}"
+    local ID="$2"
+    local MESSAGE="$3"
+    local FIX="${4:-}"
+
+    case "$STATUS" in
+        warn) DOCTOR_WARNINGS=$((DOCTOR_WARNINGS + 1)) ;;
+        fail) DOCTOR_FAILURES=$((DOCTOR_FAILURES + 1)) ;;
+    esac
+
+    if [ "$DOCTOR_FORMAT" == "json" ]; then
+        if [ "$STATUS" == "ok" ]; then
+            FIX=""
+        fi
+
+        DOCTOR_CHECKS+=("{\"id\":$(json_string "$ID"),\"status\":$(json_string "$STATUS"),\"message\":$(json_string "$MESSAGE"),\"fix\":$(json_string "$FIX")}")
+
+        return
+    fi
 
     case "$STATUS" in
         ok) echo "  ${GREEN}✓${NC} ${MESSAGE}" ;;
-        warn) echo "  ${YELLOW}!${NC} ${MESSAGE}"; DOCTOR_WARNINGS=$((DOCTOR_WARNINGS + 1)) ;;
-        fail) echo "  ${RED}✗${NC} ${MESSAGE}"; DOCTOR_FAILURES=$((DOCTOR_FAILURES + 1)) ;;
+        warn) echo "  ${YELLOW}!${NC} ${MESSAGE}" ;;
+        fail) echo "  ${RED}✗${NC} ${MESSAGE}" ;;
     esac
 
     if [ -n "$FIX" ] && [ "$STATUS" != "ok" ]; then
@@ -477,42 +507,57 @@ function doctor_report {
 
 # Checks the host for what the services need, and prints how to fix what's
 # missing without changing anything itself, since most fixes need root
-# (used by "lpod doctor"). Fails when something stops services from running...
+# (used by "lpod doctor"). Fails when something stops services from running.
+# With "--json", prints the outcomes as JSON instead, for tools to read...
 function cmd_doctor {
     local PODMAN="${LPOD_PODMAN_BINARY:-podman}"
     local USER_NAME
     USER_NAME="$(id -un)"
 
+    DOCTOR_FORMAT="text"
+    DOCTOR_CHECKS=()
     DOCTOR_WARNINGS=0
     DOCTOR_FAILURES=0
 
-    echo "${BOLD}lpod ${LPOD_VERSION} doctor${NC}"
-    echo
+    case "${1:-}" in
+        "") ;;
+        --json) DOCTOR_FORMAT="json" ;;
+        *)
+            echo "Unknown option: $1. Usage: lpod doctor [--json]" >&2
+
+            return 1
+            ;;
+    esac
+
+    if [ "$DOCTOR_FORMAT" == "text" ]; then
+        echo "${BOLD}lpod ${LPOD_VERSION} doctor${NC}"
+        echo
+    fi
 
     # Podman with Quadlet...
     local VERSION
 
     if ! VERSION="$("$PODMAN" version --format '{{.Client.Version}}' 2>/dev/null)"; then
-        doctor_report fail "Podman isn't installed, or doesn't run" "Install podman from your distribution's packages."
+        doctor_report fail podman "Podman isn't installed, or doesn't run" "Install podman from your distribution's packages."
     elif ! "$PODMAN" quadlet --help >/dev/null 2>&1; then
-        doctor_report fail "Podman ${VERSION} has no \"podman quadlet\" command" "Upgrade to Podman 5.6 or newer."
+        doctor_report fail podman "Podman ${VERSION} has no \"podman quadlet\" command" "Upgrade to Podman 5.6 or newer."
     else
-        doctor_report ok "Podman ${VERSION} with Quadlet"
+        doctor_report ok podman "Podman ${VERSION} with Quadlet"
     fi
 
     # The systemd manager that runs the Quadlet units...
     if "${SYSTEMCTL_CMD[@]}" show-environment >/dev/null 2>&1; then
-        doctor_report ok "The systemd ${SYSTEMD_SCOPE} manager is reachable"
+        doctor_report ok systemd "The systemd ${SYSTEMD_SCOPE} manager is reachable"
     else
-        doctor_report fail "The systemd ${SYSTEMD_SCOPE} manager isn't reachable" "Log in through a real session (not \"su\" or \"sudo -u\"), or use \"machinectl shell ${USER_NAME}@\"."
+        doctor_report fail systemd "The systemd ${SYSTEMD_SCOPE} manager isn't reachable" "Log in through a real session (not \"su\" or \"sudo -u\"), or use \"machinectl shell ${USER_NAME}@\"."
     fi
 
     if [ "$(id -u)" -ne 0 ]; then
         # Rootless services only start at boot, and keep running after logout, with linger...
         if [ "$(loginctl show-user "$USER_NAME" --property=Linger --value 2>/dev/null)" == "yes" ]; then
-            doctor_report ok "Linger is on, so services start at boot"
+            doctor_report ok linger "Linger is on, so services start at boot"
         else
-            doctor_report warn "Linger is off, so services stop when you log out and don't start at boot" "loginctl enable-linger ${USER_NAME}"
+            doctor_report warn linger "Linger is off, so services stop when you log out and don't start at boot" "loginctl enable-linger ${USER_NAME}"
         fi
 
         # Rootless containers map their users onto subordinate IDs...
@@ -526,9 +571,9 @@ function cmd_doctor {
         done
 
         if [ ${#MISSING_IDS[@]} -eq 0 ]; then
-            doctor_report ok "Subordinate user and group IDs are set up"
+            doctor_report ok subids "Subordinate user and group IDs are set up"
         else
-            doctor_report fail "${USER_NAME} has no entry in ${MISSING_IDS[*]}" "sudo usermod --add-subuids 100000-165535 --add-subgids 100000-165535 ${USER_NAME}
+            doctor_report fail subids "${USER_NAME} has no entry in ${MISSING_IDS[*]}" "sudo usermod --add-subuids 100000-165535 --add-subgids 100000-165535 ${USER_NAME}
 podman system migrate"
         fi
 
@@ -537,18 +582,18 @@ podman system migrate"
         PORT_START="$(cat /proc/sys/net/ipv4/ip_unprivileged_port_start 2>/dev/null)"
 
         if [ -z "$PORT_START" ] || [ "$PORT_START" -le 80 ]; then
-            doctor_report ok "Rootless containers may publish ports 80 and 443"
+            doctor_report ok ports "Rootless containers may publish ports 80 and 443"
         else
-            doctor_report warn "Rootless containers can't publish ports below ${PORT_START}, which the proxy's 80 and 443 are" "echo 'net.ipv4.ip_unprivileged_port_start=80' | sudo tee /etc/sysctl.d/99-lpod.conf
+            doctor_report warn ports "Rootless containers can't publish ports below ${PORT_START}, which the proxy's 80 and 443 are" "echo 'net.ipv4.ip_unprivileged_port_start=80' | sudo tee /etc/sysctl.d/99-lpod.conf
 sudo sysctl --system"
         fi
     fi
 
     # The idle check's templates, which the installer writes...
     if [ -f "${SYSTEMD_UNIT_PATH}/lpod-idle@.service" ] && [ -f "${SYSTEMD_UNIT_PATH}/lpod-idle@.timer" ]; then
-        doctor_report ok "The idle check's systemd templates are installed"
+        doctor_report ok idle-templates "The idle check's systemd templates are installed"
     else
-        doctor_report warn "The idle check's systemd templates are missing, so on-demand apps keep their workers running" "lpod idle setup"
+        doctor_report warn idle-templates "The idle check's systemd templates are missing, so on-demand apps keep their workers running" "lpod idle setup"
     fi
 
     # The proxy's local CA, which browsers and the host only accept once trusted...
@@ -558,9 +603,9 @@ sudo sysctl --system"
 
         if "$PODMAN" cp systemd-proxy:/data/caddy/pki/authorities/local/root.crt "$CERTIFICATE" 2>/dev/null; then
             if openssl verify "$CERTIFICATE" >/dev/null 2>&1; then
-                doctor_report ok "The proxy's local certificate is trusted"
+                doctor_report ok proxy-certificate "The proxy's local certificate is trusted"
             else
-                doctor_report warn "The proxy's local certificate isn't trusted by this host" "lpod proxy export-cert, then add ~/proxy.crt to your trust store:
+                doctor_report warn proxy-certificate "The proxy's local certificate isn't trusted by this host" "lpod proxy export-cert, then add ~/proxy.crt to your trust store:
 https://foxws.nl/laravel-podman/proxy#trusting-the-local-certificate"
             fi
         fi
@@ -577,9 +622,9 @@ https://foxws.nl/laravel-podman/proxy#trusting-the-local-certificate"
 
     if [ -n "$APP_HOST" ]; then
         if getent hosts "$APP_HOST" >/dev/null 2>&1; then
-            doctor_report ok "${APP_HOST} (APP_URL) resolves"
+            doctor_report ok app-url "${APP_HOST} (APP_URL) resolves"
         else
-            doctor_report warn "${APP_HOST} (APP_URL) doesn't resolve" "Add it, and its subdomains, to /etc/hosts:
+            doctor_report warn app-url "${APP_HOST} (APP_URL) doesn't resolve" "Add it, and its subdomains, to /etc/hosts:
 https://foxws.nl/laravel-podman/proxy#dns"
         fi
     fi
@@ -589,9 +634,20 @@ https://foxws.nl/laravel-podman/proxy#dns"
     FAILED="$("${SYSTEMCTL_CMD[@]}" list-units --failed --plain --no-legend --type=service 2>/dev/null | awk '{ print $1 }')"
 
     if [ -z "$FAILED" ]; then
-        doctor_report ok "No services have failed"
+        doctor_report ok failed-services "No services have failed"
     else
-        doctor_report warn "These services have failed: $(echo "$FAILED" | paste -sd ' ')" "See why with: journalctl ${SYSTEMD_JOURNAL_SCOPE}-u SERVICE -e"
+        doctor_report warn failed-services "These services have failed: $(echo "$FAILED" | paste -sd ' ')" "See why with: journalctl ${SYSTEMD_JOURNAL_SCOPE}-u SERVICE -e"
+    fi
+
+    if [ "$DOCTOR_FORMAT" == "json" ]; then
+        local CHECKS
+        CHECKS="$(IFS=,; echo "${DOCTOR_CHECKS[*]}")"
+
+        echo "{\"lpod\":$(json_string "$LPOD_VERSION"),\"failures\":${DOCTOR_FAILURES},\"warnings\":${DOCTOR_WARNINGS},\"checks\":[${CHECKS}]}"
+
+        [ "$DOCTOR_FAILURES" -eq 0 ]
+
+        return
     fi
 
     echo
@@ -796,7 +852,8 @@ case "$1" in
         ;;
 
     doctor)
-        cmd_doctor
+        shift
+        cmd_doctor "$@"
         exit $?
         ;;
 
