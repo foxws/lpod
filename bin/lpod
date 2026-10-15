@@ -721,15 +721,21 @@ function cmd_installer {
 
     cmd_doctor --json > "$REPORT" || true
 
+    # On another address than 127.0.0.1, the installer serves HTTPS for the
+    # host in its link, which must be one a browser can open...
+    local HOST_ENV=()
+
     if [ "$LISTEN" != "127.0.0.1" ] && [ "$LISTEN" != "localhost" ]; then
-        echo "${YELLOW}The installer will listen on ${LISTEN}:${PORT}. Anyone who can reach it and gets the link can install apps as you.${NC}"
-    fi
+        local URL_HOST="$LISTEN"
 
-    # The link the installer prints must work in a browser...
-    local URL_HOST="$LISTEN"
+        if [ "$LISTEN" == "0.0.0.0" ] || [ "$LISTEN" == "::" ]; then
+            URL_HOST="$(hostname -I 2>/dev/null | awk '{ print $1 }')"
+            URL_HOST="${URL_HOST:-$(hostname -f 2>/dev/null || hostname)}"
+        fi
 
-    if [ "$LISTEN" == "0.0.0.0" ] || [ "$LISTEN" == "::" ]; then
-        URL_HOST="$(hostname -f 2>/dev/null || hostname)"
+        HOST_ENV=(--env "INSTALLER_HOST=${URL_HOST}")
+
+        echo "${YELLOW}The installer will listen on ${LISTEN}:${PORT} over HTTPS. Anyone who can reach it and gets the link can install apps as you.${NC}"
     fi
 
     local TTY=()
@@ -741,7 +747,8 @@ function cmd_installer {
     "${LPOD_PODMAN_BINARY:-podman}" run --rm "${TTY[@]}" \
         --pull=newer \
         --publish "${LISTEN}:${PORT}:8085" \
-        --env "APP_URL=http://${URL_HOST}:${PORT}" \
+        --env "INSTALLER_PUBLISHED_PORT=${PORT}" \
+        "${HOST_ENV[@]}" \
         --volume "${SOCKET}:/run/podman/podman.sock" \
         --volume "${REPORT}:/run/installer/doctor.json:ro" \
         --security-opt label=disable \
