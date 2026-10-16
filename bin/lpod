@@ -139,7 +139,7 @@ function display_help {
     echo "  ${GREEN}lpod doctor [--json]${NC}            Check the host for what the services need, and how to fix what's missing"
     echo
     echo "${YELLOW}Installing Apps:${NC}"
-    echo "  ${GREEN}lpod installer IMAGE${NC}            Start a one-time installer image on 127.0.0.1:8085 (--listen, --port), removed when stopped"
+    echo "  ${GREEN}lpod installer IMAGE${NC}            Start a one-time installer image on 127.0.0.1:8085 (--listen, --port, --workspace, --env-file, --app), removed when stopped"
     echo
     echo "${YELLOW}Updating:${NC}"
     echo "  ${GREEN}lpod self-update [VERSION]${NC}      Upgrade lpod and lpod-setup in place (latest, or e.g. v2.2.0)"
@@ -676,15 +676,24 @@ function cmd_installer {
     local IMAGE=""
     local LISTEN="127.0.0.1"
     local PORT="8085"
+    local WORKSPACE=""
+    local ENV_FILE=""
+    local APP=""
 
     while [ $# -gt 0 ]; do
         case "$1" in
+            --workspace) WORKSPACE="$2"; shift 2 ;;
+            --workspace=*) WORKSPACE="${1#*=}"; shift ;;
+            --env-file) ENV_FILE="$2"; shift 2 ;;
+            --env-file=*) ENV_FILE="${1#*=}"; shift ;;
+            --app) APP="$2"; shift 2 ;;
+            --app=*) APP="${1#*=}"; shift ;;
             --listen) LISTEN="$2"; shift 2 ;;
             --listen=*) LISTEN="${1#*=}"; shift ;;
             --port) PORT="$2"; shift 2 ;;
             --port=*) PORT="${1#*=}"; shift ;;
             -*)
-                echo "Unknown option: $1. Usage: lpod installer IMAGE [--listen ADDRESS] [--port PORT]" >&2
+                echo "Unknown option: $1. Usage: lpod installer IMAGE [--listen ADDRESS] [--port PORT] [--workspace PATH] [--env-file FILE] [--app NAME]" >&2
 
                 return 1
                 ;;
@@ -693,7 +702,17 @@ function cmd_installer {
     done
 
     if [ -z "$IMAGE" ]; then
-        echo "Usage: lpod installer IMAGE [--listen ADDRESS] [--port PORT]" >&2
+        echo "Usage: lpod installer IMAGE [--listen ADDRESS] [--port PORT] [--workspace PATH] [--env-file FILE] [--app NAME]" >&2
+
+        return 1
+    fi
+
+    local WORKSPACE_ARGS=()
+
+    if [ -n "$WORKSPACE" ]; then
+        installer_workspace_args || return 1
+    elif [ -n "$ENV_FILE" ] || [ -n "$APP" ]; then
+        echo "--env-file and --app need --workspace, the app's folder to install the services from." >&2
 
         return 1
     fi
@@ -751,8 +770,80 @@ function cmd_installer {
         "${HOST_ENV[@]}" \
         --volume "${SOCKET}:/run/podman/podman.sock" \
         --volume "${REPORT}:/run/installer/doctor.json:ro" \
+        "${WORKSPACE_ARGS[@]}" \
         --security-opt label=disable \
         "$IMAGE"
+}
+
+# Sets WORKSPACE_ARGS for "lpod installer --workspace": mounts the app's
+# folder, its ".env", the user's Quadlet and systemd folders and their D-Bus
+# session bus, so the installer can render the app's presets with
+# laravel-podman, install them and start them. "--userns=keep-id" runs the
+# installer as the user's own UID, which the session bus requires, and keeps
+# the files it writes theirs...
+function installer_workspace_args {
+    if [ "$(id -u)" -eq 0 ]; then
+        echo "--workspace installs the services as rootless Quadlets, so run it as the user who runs the app, not root." >&2
+
+        return 1
+    fi
+
+    if [ ! -d "$WORKSPACE" ]; then
+        echo "The workspace ${WORKSPACE} is not a folder." >&2
+
+        return 1
+    fi
+
+    WORKSPACE="$(cd "$WORKSPACE" && pwd)"
+
+    if [ -n "$ENV_FILE" ] && [ ! -f "$ENV_FILE" ]; then
+        echo "The env file ${ENV_FILE} does not exist." >&2
+
+        return 1
+    fi
+
+    ENV_FILE="${ENV_FILE:-${WORKSPACE}/.env}"
+
+    local BUS="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/bus"
+
+    if [ ! -S "$BUS" ]; then
+        echo "Your D-Bus session bus (${BUS}) doesn't exist, so the installer can't reach systemd. Enable linger with 'loginctl enable-linger', or log in again." >&2
+
+        return 1
+    fi
+
+    local QUADLET_PATH UNIT_PATH
+    QUADLET_PATH="$(quadlet_unit_path)"
+    UNIT_PATH="${SYSTEMD_UNIT_PATH}"
+
+    mkdir -p "$QUADLET_PATH" "$UNIT_PATH" || return 1
+
+    WORKSPACE_ARGS=(
+        --userns=keep-id
+        --volume "${WORKSPACE}:/workspace"
+        --env INSTALLER_WORKSPACE=/workspace
+        --env PODMAN_BASE_PATH=/workspace
+        --env "PODMAN_WORKING_PATH=${WORKSPACE}"
+        --env "PODMAN_QUADLET_UID=$(id -u)"
+        --env "PODMAN_QUADLET_GID=$(id -g)"
+        --volume "${QUADLET_PATH}:/run/installer/quadlets"
+        --volume "${UNIT_PATH}:/run/installer/units"
+        --volume "${BUS}:/run/installer/bus"
+        --env DBUS_SESSION_BUS_ADDRESS=unix:path=/run/installer/bus
+    )
+
+    if [ -f "$ENV_FILE" ]; then
+        WORKSPACE_ARGS+=(
+            --volume "$(cd "$(dirname "$ENV_FILE")" && pwd)/$(basename "$ENV_FILE"):/run/installer/app.env:ro"
+            --env INSTALLER_ENV_FILE=/run/installer/app.env
+        )
+    else
+        echo "${YELLOW}No ${ENV_FILE} found, so the services are rendered with the defaults of the app's config/podman.php.${NC}"
+    fi
+
+    if [ -n "$APP" ]; then
+        WORKSPACE_ARGS+=(--env "PODMAN_QUADLET_PREFIX=${APP}")
+    fi
 }
 
 # Where Quadlet looks for the units "podman quadlet install" installs, and

@@ -188,6 +188,28 @@ To open it on your network instead, pass the server's address, for example `lpod
 
 The installer prints a link that works once. Open it in your browser.
 
+### Installing the app's services
+
+Pass the app's folder with `--workspace` to let the installer render the app's presets with [laravel-podman](https://github.com/foxws/laravel-podman), install them as Quadlets and start them:
+
+```bash
+lpod installer ghcr.io/francoism90/stry-installer --workspace ~/stry
+```
+
+| Option             | Description                                                                 |
+| ------------------ | --------------------------------------------------------------------------- |
+| `--workspace PATH` | The app's folder. The rendered `podman/` folder, runtimes and storage go here |
+| `--env-file FILE`  | The app's `.env`, `PATH/.env` by default. Only `APP_NAME`, `APP_URL`, `APP_ENV` and `PODMAN_*` are read |
+| `--app NAME`       | The services' prefix (`PODMAN_QUADLET_PREFIX`), `APP_NAME` by default         |
+
+With `--workspace`, `lpod installer` also:
+
+- mounts your Quadlet folder (`~/.config/containers/systemd`), your systemd user folder and your D-Bus session bus, so the installer can install the units and start them;
+- runs the installer as your own UID (`--userns=keep-id`), which the session bus requires, so the files it writes are yours too;
+- passes the workspace's host path, your UID and your GID, which go into the rendered units.
+
+It only works rootless, as the user who runs the app. This does what `lpod-setup --install` does, without PHP or Composer containers on the host.
+
 ## Updating
 
 | Command                      | Description                                                         |
