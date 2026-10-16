@@ -174,7 +174,7 @@ The ids are `podman`, `systemd`, `linger`, `subids`, `ports`, `idle-templates`, 
 | `lpod installer IMAGE`  | Start a one-time installer image, such as an app's installer built on [laravel-installer](https://github.com/foxws/laravel-installer) |
 
 ```bash
-lpod installer ghcr.io/francoism90/stry-installer
+lpod installer ghcr.io/acme/my-project-installer
 ```
 
 `lpod installer`:
@@ -193,7 +193,7 @@ The installer prints a link that works once. Open it in your browser.
 Pass the app's folder with `--workspace` to let the installer render the app's presets with [laravel-podman](https://github.com/foxws/laravel-podman), install them as Quadlets and start them:
 
 ```bash
-lpod installer ghcr.io/francoism90/stry-installer --workspace ~/stry
+lpod installer ghcr.io/acme/my-project-installer --workspace ~/my-project
 ```
 
 | Option             | Description                                                                 |
