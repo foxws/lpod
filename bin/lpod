@@ -669,9 +669,9 @@ https://foxws.nl/laravel-podman/proxy#dns"
 }
 
 # Starts a one-time installer image, such as an app's "*-installer" image
-# from foxws/laravel-installer, with the host checks of "lpod doctor --json"
-# and the Podman socket it runs the app's commands through. It listens on
-# 127.0.0.1 only, and the container is removed once you stop it...
+# from foxws/laravel-installer, with the Podman socket it checks the host and
+# runs the app's commands through. It listens on 127.0.0.1 unless --listen
+# says otherwise, and the container is removed once you stop it...
 function cmd_installer {
     local IMAGE=""
     local LISTEN="127.0.0.1"
@@ -730,16 +730,6 @@ function cmd_installer {
         "${SYSTEMCTL_CMD[@]}" start podman.socket || return 1
     fi
 
-    # The host checks, which the installer can't make from inside its container...
-    local REPORT
-    REPORT="$(mktemp)"
-    chmod 644 "$REPORT"
-
-    # shellcheck disable=SC2064
-    trap "rm -f '$REPORT'" RETURN
-
-    cmd_doctor --json > "$REPORT" || true
-
     # On another address than 127.0.0.1, the installer serves HTTPS for the
     # host in its link, which must be one a browser can open...
     local HOST_ENV=()
@@ -769,7 +759,6 @@ function cmd_installer {
         --env "INSTALLER_PUBLISHED_PORT=${PORT}" \
         "${HOST_ENV[@]}" \
         --volume "${SOCKET}:/run/podman/podman.sock" \
-        --volume "${REPORT}:/run/installer/doctor.json:ro" \
         "${WORKSPACE_ARGS[@]}" \
         --security-opt label=disable \
         "$IMAGE"

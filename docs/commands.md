@@ -180,7 +180,6 @@ lpod installer ghcr.io/acme/my-project-installer
 `lpod installer`:
 
 - starts `podman.socket` when it isn't running, since the installer runs the app's commands through it;
-- runs `lpod doctor --json` and passes the report in, so the installer can show the full host check;
 - starts the image with `--rm`, so nothing is left behind once you stop it with Ctrl+C, and pulls a newer version of it first;
 - listens on `127.0.0.1:8085` only, over plain HTTP. On a server, reach it through `ssh -L 8085:127.0.0.1:8085 SERVER`. Pass `--port` for another port.
 
