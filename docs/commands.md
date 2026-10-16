@@ -167,6 +167,48 @@ It changes nothing. It prints how to fix each problem, and the commands that nee
 
 The ids are `podman`, `systemd`, `linger`, `subids`, `ports`, `idle-templates`, `proxy-certificate`, `app-url` and `failed-services`. Checks that don't apply, such as the rootless ones when running as root, are left out.
 
+## Installing apps
+
+| Command                 | Description                                                                  |
+| ----------------------- | ---------------------------------------------------------------------------- |
+| `lpod installer IMAGE`  | Start a one-time installer image, such as an app's installer built on [laravel-installer](https://github.com/foxws/laravel-installer) |
+
+```bash
+lpod installer ghcr.io/acme/my-project-installer
+```
+
+`lpod installer`:
+
+- starts `podman.socket` when it isn't running, since the installer runs the app's commands through it;
+- starts the image with `--rm`, so nothing is left behind once you stop it with Ctrl+C, and pulls a newer version of it first;
+- listens on `127.0.0.1:8085` only, over plain HTTP. On a server, reach it through `ssh -L 8085:127.0.0.1:8085 SERVER`. Pass `--port` for another port.
+
+To open it on your network instead, pass the server's address, for example `lpod installer IMAGE --listen 192.168.1.100`. The installer then serves HTTPS with a certificate from its own internal CA, which your browser warns about once, and prints `https://192.168.1.100:8085/?token=…`. `--listen 0.0.0.0` listens on every address and puts the server's first IP address in the link. Anyone who can reach it and gets the link can install apps as you.
+
+The installer prints a link that works once. Open it in your browser.
+
+### Installing the app's services
+
+Pass the app's folder with `--workspace` to let the installer render the app's presets with [laravel-podman](https://github.com/foxws/laravel-podman), install them as Quadlets and start them:
+
+```bash
+lpod installer ghcr.io/acme/my-project-installer --workspace ~/my-project
+```
+
+| Option             | Description                                                                 |
+| ------------------ | --------------------------------------------------------------------------- |
+| `--workspace PATH` | The app's folder. The rendered `podman/` folder, runtimes and storage go here |
+| `--env-file FILE`  | The app's `.env`, `PATH/.env` by default. Only `APP_NAME`, `APP_URL`, `APP_ENV` and `PODMAN_*` are read |
+| `--app NAME`       | The services' prefix (`PODMAN_QUADLET_PREFIX`), `APP_NAME` by default         |
+
+With `--workspace`, `lpod installer` also:
+
+- mounts your Quadlet folder (`~/.config/containers/systemd`), your systemd user folder and your D-Bus session bus, so the installer can install the units and start them;
+- runs the installer as your own UID (`--userns=keep-id`), which the session bus requires, so the files it writes are yours too;
+- mounts the workspace at `/workspace`, where the installer reads its `.env` by default, and passes its host path, your UID and your GID, which go into the rendered units.
+
+It only works rootless, as the user who runs the app. This does what `lpod-setup --install` does, without PHP or Composer containers on the host.
+
 ## Updating
 
 | Command                      | Description                                                         |
