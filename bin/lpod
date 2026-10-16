@@ -669,7 +669,7 @@ https://foxws.nl/laravel-podman/proxy#dns"
 }
 
 # Starts a one-time installer image, such as an app's "*-installer" image
-# from foxws/podman-installer, with the host checks of "lpod doctor --json"
+# from foxws/laravel-installer, with the host checks of "lpod doctor --json"
 # and the Podman socket it runs the app's commands through. It listens on
 # 127.0.0.1 only, and the container is removed once you stop it...
 function cmd_installer {

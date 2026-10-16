@@ -171,7 +171,7 @@ The ids are `podman`, `systemd`, `linger`, `subids`, `ports`, `idle-templates`, 
 
 | Command                 | Description                                                                  |
 | ----------------------- | ---------------------------------------------------------------------------- |
-| `lpod installer IMAGE`  | Start a one-time installer image, such as an app's installer built on [podman-installer](https://github.com/foxws/podman-installer) |
+| `lpod installer IMAGE`  | Start a one-time installer image, such as an app's installer built on [laravel-installer](https://github.com/foxws/laravel-installer) |
 
 ```bash
 lpod installer ghcr.io/francoism90/stry-installer
