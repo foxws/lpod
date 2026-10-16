@@ -206,7 +206,7 @@ With `--workspace`, `lpod installer` also:
 
 - mounts your Quadlet folder (`~/.config/containers/systemd`), your systemd user folder and your D-Bus session bus, so the installer can install the units and start them;
 - runs the installer as your own UID (`--userns=keep-id`), which the session bus requires, so the files it writes are yours too;
-- passes the workspace's host path, your UID and your GID, which go into the rendered units.
+- mounts the workspace at `/workspace`, where the installer reads its `.env` by default, and passes its host path, your UID and your GID, which go into the rendered units.
 
 It only works rootless, as the user who runs the app. This does what `lpod-setup --install` does, without PHP or Composer containers on the host.
 

@@ -802,8 +802,6 @@ function installer_workspace_args {
         return 1
     fi
 
-    ENV_FILE="${ENV_FILE:-${WORKSPACE}/.env}"
-
     local BUS="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/bus"
 
     if [ ! -S "$BUS" ]; then
@@ -821,8 +819,6 @@ function installer_workspace_args {
     WORKSPACE_ARGS=(
         --userns=keep-id
         --volume "${WORKSPACE}:/workspace"
-        --env INSTALLER_WORKSPACE=/workspace
-        --env PODMAN_BASE_PATH=/workspace
         --env "PODMAN_WORKING_PATH=${WORKSPACE}"
         --env "PODMAN_QUADLET_UID=$(id -u)"
         --env "PODMAN_QUADLET_GID=$(id -g)"
@@ -832,13 +828,15 @@ function installer_workspace_args {
         --env DBUS_SESSION_BUS_ADDRESS=unix:path=/run/installer/bus
     )
 
-    if [ -f "$ENV_FILE" ]; then
+    # The installer reads the workspace's own ".env" by default, so only
+    # another one needs mounting...
+    if [ -n "$ENV_FILE" ]; then
         WORKSPACE_ARGS+=(
             --volume "$(cd "$(dirname "$ENV_FILE")" && pwd)/$(basename "$ENV_FILE"):/run/installer/app.env:ro"
             --env INSTALLER_ENV_FILE=/run/installer/app.env
         )
-    else
-        echo "${YELLOW}No ${ENV_FILE} found, so the services are rendered with the defaults of the app's config/podman.php.${NC}"
+    elif [ ! -f "${WORKSPACE}/.env" ]; then
+        echo "${YELLOW}No ${WORKSPACE}/.env found, so the services are rendered with the defaults of the app's config/podman.php.${NC}"
     fi
 
     if [ -n "$APP" ]; then
