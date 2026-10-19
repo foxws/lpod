@@ -11,7 +11,7 @@ Run the installer:
 curl -fsSL https://github.com/foxws/lpod/releases/latest/download/install.sh | bash
 ```
 
-It installs `lpod` and `lpod-setup` to `~/.local/bin` (`/usr/local/bin` as root) and writes the systemd templates for the [on-demand idle check](commands.md#on-demand-idle-check). It also offers to enable linger, so your services start at boot without logging in.
+It installs `lpod` and `lpod-setup` to `~/.local/bin` (`/usr/local/bin` as root) It also offers to enable linger, so your services start at boot without logging in.
 
 The installer:
 - **Checks the downloads.** Each one is verified against the release's `SHA256SUMS` before anything is replaced. A failed download or checksum leaves your current install as it was.
@@ -40,7 +40,7 @@ lpod self-update v2.2.0     # or a specific one
 curl -fsSL https://github.com/foxws/lpod/releases/latest/download/install.sh | bash -s -- --uninstall
 ```
 
-This disables every app's idle check (`lpod-idle@*.timer`), then removes the templates, `lpod` and `lpod-setup`. Your services, secrets and volumes stay as they are. Remove those first with `lpod uninstall APPLICATION` if you want them gone too.
+This disables the `lpod-idle@*.timer` idle checks of releases before v3, then removes their templates, `lpod` and `lpod-setup`. Your services, secrets and volumes stay as they are. Remove those first with `lpod uninstall APPLICATION` if you want them gone too.
 
 ## Installing by hand
 
@@ -49,7 +49,6 @@ Download the script and make it executable:
 ```sh
 curl -fsSL -o ~/.local/bin/lpod https://github.com/foxws/lpod/releases/latest/download/lpod
 chmod +x ~/.local/bin/lpod
-lpod idle setup
 ```
 
 ## Pinning a version
