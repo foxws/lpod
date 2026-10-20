@@ -379,12 +379,17 @@ function cmd_idle {
         return 1
     fi
 
+    local STATUS=0
+
     SINCE="$(date '+%Y-%m-%d %H:%M:%S')"
 
-    "${SYSTEMCTL_CMD[@]}" start "${APPLICATION}-idle.service" || return 1
+    "${SYSTEMCTL_CMD[@]}" start "${APPLICATION}-idle.service" || STATUS=$?
 
+    # Shown when the check failed too, since the journal says why...
     # shellcheck disable=SC2086
     journalctl ${SYSTEMD_JOURNAL_SCOPE}-u "${APPLICATION}-idle.service" --since "$SINCE" --no-pager --output cat
+
+    return "$STATUS"
 }
 
 # Re-runs the installer for this copy of lpod, so it upgrades in place

@@ -11,7 +11,7 @@ Run the installer:
 curl -fsSL https://github.com/foxws/lpod/releases/latest/download/install.sh | bash
 ```
 
-It installs `lpod` and `lpod-setup` to `~/.local/bin` (`/usr/local/bin` as root) It also offers to enable linger, so your services start at boot without logging in.
+It installs `lpod` and `lpod-setup` to `~/.local/bin` (`/usr/local/bin` as root). It also offers to enable linger, so your services start at boot without logging in.
 
 The installer:
 - **Checks the downloads.** Each one is verified against the release's `SHA256SUMS` before anything is replaced. A failed download or checksum leaves your current install as it was.
