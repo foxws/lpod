@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
-# Installs or upgrades lpod and lpod-setup, then writes the systemd templates
-# for "lpod idle". Run it again, or "lpod self-update", to upgrade:
+# Installs or upgrades lpod and lpod-setup. Run it again, or "lpod
+# self-update", to upgrade:
 #
 #   curl -fsSL https://github.com/foxws/lpod/releases/latest/download/install.sh | bash
 #
@@ -169,14 +169,17 @@ function do_install {
         *) warn "${INSTALL_DIR} isn't on your PATH. Add it to your shell profile to run lpod." ;;
     esac
 
-    if ! has_systemd_session; then
-        warn "No systemd user session. Log in directly (not with su) and run: lpod idle setup"
+    # The idle check comes with laravel-podman's on-demand socket since v3.
+    # The "lpod-idle@" templates of older releases keep working, as they run
+    # "lpod idle", so they're left in place until the apps move over...
+    local UNIT
 
-        return 0
-    fi
+    for UNIT in "${SYSTEMD_UNIT_PATH}"/timers.target.wants/lpod-idle@*.timer; do
+        [ -e "$UNIT" ] || [ -L "$UNIT" ] || continue
 
-    "${INSTALL_DIR}/lpod" idle setup
-    info "Wrote the lpod-idle@ systemd templates. Enable the idle check per app with: lpod idle enable APPLICATION"
+        UNIT="$(basename "$UNIT" .timer)"
+        warn "${UNIT#lpod-idle@} uses the old idle check. Reinstall its socket, then turn the old one off: lpod install ondemand/${UNIT#lpod-idle@}-ondemand.socket --replace && lpod idle disable ${UNIT#lpod-idle@}"
+    done
 
     # Rootless services only start at boot, and keep running after logout, with linger...
     if [ "$(id -u)" -ne 0 ] && [ "$(loginctl show-user "$(id -un)" --property=Linger --value 2>/dev/null)" != "yes" ]; then
