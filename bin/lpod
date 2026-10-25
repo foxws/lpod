@@ -270,7 +270,12 @@ function cmd_install_unit {
         return 1
     fi
 
+    local DIRECTORY
+    DIRECTORY="$(dirname "$SOURCE")"
+
     local FILES=("$SOURCE")
+    local TEMPLATES=()
+    local DROPINS=()
     local WANTED=()
     local UNIT
 
@@ -279,21 +284,40 @@ function cmd_install_unit {
     fi
 
     # Units the socket or timer "Wants=" that were rendered next to it, such
-    # as the idle timer of an on-demand socket, are installed with it...
+    # as the idle timer of an on-demand socket, are installed with it. An
+    # instance of a template, such as "laravel-idle@my-app.timer", installs
+    # the template ("laravel-idle@.timer") and the instance's drop-ins...
     for UNIT in $(unit_wants "$SOURCE"); do
-        if [ -f "$(dirname "$SOURCE")/${UNIT}" ]; then
-            FILES+=("$(dirname "$SOURCE")/${UNIT}")
+        if [ -f "${DIRECTORY}/${UNIT}" ]; then
+            FILES+=("${DIRECTORY}/${UNIT}")
             WANTED+=("$UNIT")
 
-            if [ -f "$(dirname "$SOURCE")/${UNIT%.*}.service" ]; then
-                FILES+=("$(dirname "$SOURCE")/${UNIT%.*}.service")
+            if [ -f "${DIRECTORY}/${UNIT%.*}.service" ]; then
+                FILES+=("${DIRECTORY}/${UNIT%.*}.service")
             fi
+        elif [[ "$UNIT" == *@?*.* ]] && [ -f "${DIRECTORY}/$(unit_template "$UNIT")" ]; then
+            TEMPLATES+=("${DIRECTORY}/$(unit_template "$UNIT")")
+            WANTED+=("$UNIT")
+
+            if [ -f "${DIRECTORY}/$(unit_template "${UNIT%.*}.service")" ]; then
+                TEMPLATES+=("${DIRECTORY}/$(unit_template "${UNIT%.*}.service")")
+            fi
+
+            local DROPIN
+
+            for DROPIN in "${DIRECTORY}/${UNIT}.d" "${DIRECTORY}/${UNIT%.*}.service.d"; do
+                if [ -d "$DROPIN" ]; then
+                    DROPINS+=("$DROPIN")
+                fi
+            done
         fi
     done
 
     local FILE
 
-    for FILE in "${FILES[@]}"; do
+    # Templates are shared by every app on the host, so they're replaced
+    # without --replace...
+    for FILE in "${FILES[@]}" "${DROPINS[@]}"; do
         if [ -e "${SYSTEMD_UNIT_PATH}/$(basename "$FILE")" ] && [ "$REPLACE" -eq 0 ]; then
             echo "${SYSTEMD_UNIT_PATH}/$(basename "$FILE") already exists. Use --replace to overwrite it." >&2
 
@@ -302,7 +326,12 @@ function cmd_install_unit {
     done
 
     mkdir -p "$SYSTEMD_UNIT_PATH" || return 1
-    cp "${FILES[@]}" "$SYSTEMD_UNIT_PATH/" || return 1
+    cp "${FILES[@]}" "${TEMPLATES[@]}" "$SYSTEMD_UNIT_PATH/" || return 1
+
+    for FILE in "${DROPINS[@]}"; do
+        rm -rf "${SYSTEMD_UNIT_PATH:?}/$(basename "$FILE")"
+        cp -r "$FILE" "$SYSTEMD_UNIT_PATH/" || return 1
+    done
 
     "${SYSTEMCTL_CMD[@]}" daemon-reload || return 1
     "${SYSTEMCTL_CMD[@]}" enable --now "$(basename "$SOURCE")" || return 1
@@ -317,6 +346,12 @@ function cmd_install_unit {
 # Prints the units a unit file lists on its "Wants=" lines...
 function unit_wants {
     sed -n 's/^Wants=//p' "$1" | tr ' ' '\n' | sed '/^$/d'
+}
+
+# Prints the template of a unit instance: "laravel-idle@.timer" for
+# "laravel-idle@my-app.timer"...
+function unit_template {
+    echo "${1%%@*}@.${1##*.}"
 }
 
 # Stops, disables and removes a unit installed by "cmd_install_unit", along
@@ -342,6 +377,11 @@ function cmd_remove_unit {
         if [ -f "${SYSTEMD_UNIT_PATH}/${WANTED}" ]; then
             "${SYSTEMCTL_CMD[@]}" stop "$WANTED"
             REMOVE+=("$WANTED")
+        elif [[ "$WANTED" == *@?*.* ]]; then
+            # An instance of a shared template: its drop-ins go, the
+            # template stays for the other apps...
+            "${SYSTEMCTL_CMD[@]}" stop "$WANTED" "${WANTED%.*}.service" 2>/dev/null
+            rm -rf "${SYSTEMD_UNIT_PATH:?}/${WANTED}.d" "${SYSTEMD_UNIT_PATH:?}/${WANTED%.*}.service.d"
         fi
     done
 
@@ -365,14 +405,20 @@ function unit_is_active {
 }
 
 # Runs an on-demand application's idle check once, and prints what it did
-# (used by "lpod idle APPLICATION"). The check itself is the "APPLICATION-idle"
-# service that laravel-podman renders next to the on-demand socket. The
+# (used by "lpod idle APPLICATION"). The check itself is the
+# "laravel-idle@APPLICATION" service that laravel-podman 6.4 renders next to
+# the on-demand socket, or "APPLICATION-idle" from 6.1 to 6.3. The
 # "lpod-idle@" timer of releases before v3 runs this too...
 function cmd_idle {
     local APPLICATION="$1"
+    local SERVICE
     local SINCE
 
-    if [ ! -f "${SYSTEMD_UNIT_PATH}/${APPLICATION}-idle.service" ]; then
+    if [ -f "${SYSTEMD_UNIT_PATH}/laravel-idle@.service" ]; then
+        SERVICE="laravel-idle@${APPLICATION}.service"
+    elif [ -f "${SYSTEMD_UNIT_PATH}/${APPLICATION}-idle.service" ]; then
+        SERVICE="${APPLICATION}-idle.service"
+    else
         echo "${APPLICATION} has no idle check installed. It comes with the on-demand socket of laravel-podman 6.1 and later:" >&2
         echo "  lpod install ondemand/${APPLICATION}-ondemand.socket --replace" >&2
 
@@ -383,11 +429,11 @@ function cmd_idle {
 
     SINCE="$(date '+%Y-%m-%d %H:%M:%S')"
 
-    "${SYSTEMCTL_CMD[@]}" start "${APPLICATION}-idle.service" || STATUS=$?
+    "${SYSTEMCTL_CMD[@]}" start "$SERVICE" || STATUS=$?
 
     # Shown when the check failed too, since the journal says why...
     # shellcheck disable=SC2086
-    journalctl ${SYSTEMD_JOURNAL_SCOPE}-u "${APPLICATION}-idle.service" --since "$SINCE" --no-pager --output cat
+    journalctl ${SYSTEMD_JOURNAL_SCOPE}-u "$SERVICE" --since "$SINCE" --no-pager --output cat
 
     return "$STATUS"
 }
