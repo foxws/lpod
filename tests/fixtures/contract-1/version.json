@@ -1,0 +1,9 @@
+{
+    "contract": 1,
+    "lpod": "4.0.0",
+    "podman": "6.1.0",
+    "systemd": "258",
+    "scope": "rootless",
+    "user": "blue",
+    "hostname": "podman-01"
+}

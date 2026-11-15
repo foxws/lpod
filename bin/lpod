@@ -5,7 +5,12 @@
 # keeps this placeholder...
 LPOD_VERSION="dev"
 
-if [ "$1" == "--version" ] || [ "$1" == "-v" ] || [ "$1" == "version" ]; then
+# The version of the JSON contract that "--json" output follows. Tools such
+# as Pods refuse a contract they don't know, so a breaking change to any
+# "--json" payload bumps it...
+LPOD_CONTRACT=1
+
+if [ "$1" == "--version" ] || [ "$1" == "-v" ] || { [ "$1" == "version" ] && [ "$2" != "--json" ]; }; then
     echo "lpod ${LPOD_VERSION}"
 
     exit 0
@@ -133,6 +138,16 @@ function display_help {
     echo "  ${GREEN}lpod idle APPLICATION${NC}           Run the idle check once, and show what it did"
     echo "  ${GREEN}lpod idle disable APPLICATION${NC}   Turn off the lpod-idle@ timer of lpod releases before v3"
     echo "  The idle check comes with the on-demand socket: 'lpod install ondemand/APPLICATION-ondemand.socket' turns it on."
+    echo
+    echo "${YELLOW}JSON (for tools such as Pods, needs jq):${NC}"
+    echo "  ${GREEN}lpod version --json${NC}                     lpod, Podman and systemd versions, the scope and the contract"
+    echo "  ${GREEN}lpod apps [--json]${NC}                      Installed applications and their state"
+    echo "  ${GREEN}lpod host [--json]${NC}                      CPU, memory, disk, containers and the next auto-update"
+    echo "  ${GREEN}lpod secrets [--json]${NC}                   Secrets, the applications using them, and missing ones"
+    echo "  ${GREEN}lpod secret create NAME --stdin${NC}         Create a secret from stdin ([--driver file|pass|shell] [--replace])"
+    echo "  ${GREEN}lpod APP status|files|logs --json${NC}       An application's details, Quadlet files or journal ([--lines N] [--since T])"
+    echo "  ${GREEN}lpod APP up|down|restart --json${NC}         Start, stop or restart an application ([--no-block])"
+    echo "  ${GREEN}lpod APP secret add NAME --json${NC}         Give an application a secret (--type env|mount --target TARGET)"
     echo
     echo "${YELLOW}Troubleshooting:${NC}"
     echo "  ${GREEN}lpod doctor [--json]${NC}            Check the host for what the services need, and how to fix what's missing"
@@ -547,10 +562,17 @@ function cmd_doctor {
 
     if ! VERSION="$("$PODMAN" version --format '{{.Client.Version}}' 2>/dev/null)"; then
         doctor_report fail podman "Podman isn't installed, or doesn't run" "Install podman from your distribution's packages."
-    elif ! "$PODMAN" quadlet --help >/dev/null 2>&1; then
-        doctor_report fail podman "Podman ${VERSION} has no \"podman quadlet\" command" "Upgrade to Podman 5.6 or newer."
+    elif [ "${VERSION%%.*}" -lt 6 ] 2>/dev/null || ! "$PODMAN" quadlet --help >/dev/null 2>&1; then
+        doctor_report fail podman "Podman ${VERSION} is older than 6.0" "Upgrade to Podman 6.0 or newer."
     else
         doctor_report ok podman "Podman ${VERSION} with Quadlet"
+    fi
+
+    # The "--json" commands that tools such as Pods run...
+    if command -v jq >/dev/null 2>&1; then
+        doctor_report ok jq "jq is installed, for the --json commands (contract ${LPOD_CONTRACT})"
+    else
+        doctor_report warn jq "jq isn't installed, so the --json commands that tools such as Pods run don't work" "Install jq from your distribution's packages."
     fi
 
     # The systemd manager that runs the Quadlet units...
@@ -655,7 +677,7 @@ https://foxws.nl/laravel-podman/proxy#dns"
         local CHECKS
         CHECKS="$(IFS=,; echo "${DOCTOR_CHECKS[*]}")"
 
-        echo "{\"lpod\":$(json_string "$LPOD_VERSION"),\"failures\":${DOCTOR_FAILURES},\"warnings\":${DOCTOR_WARNINGS},\"checks\":[${CHECKS}]}"
+        echo "{\"contract\":${LPOD_CONTRACT},\"lpod\":$(json_string "$LPOD_VERSION"),\"failures\":${DOCTOR_FAILURES},\"warnings\":${DOCTOR_WARNINGS},\"checks\":[${CHECKS}]}"
 
         [ "$DOCTOR_FAILURES" -eq 0 ]
 
@@ -785,6 +807,626 @@ function cmd_idle_dispatch {
     esac
 }
 
+# Whether "--json" is one of the arguments...
+function json_requested {
+    local ARG
+
+    for ARG in "$@"; do
+        if [ "$ARG" == "--json" ]; then
+            return 0
+        fi
+    done
+
+    return 1
+}
+
+# The "--json" commands build their output with jq...
+function require_jq {
+    if ! command -v jq >/dev/null 2>&1; then
+        echo "lpod needs jq for this command. Install it from your distribution's packages." >&2
+
+        exit 1
+    fi
+}
+
+# Prints the outcome of a "--json" command that only changes something...
+function json_ok {
+    echo "{\"contract\":${LPOD_CONTRACT},\"ok\":true}"
+}
+
+# Gives "rootless" or "rootful", the scope the Quadlet units run in...
+function quadlet_scope {
+    if [ "$(id -u)" -eq 0 ]; then
+        echo "rootful"
+    else
+        echo "rootless"
+    fi
+}
+
+# Prints the installed Quadlets as JSON, each with the application it belongs
+# to ("app"), its name without the extension ("base") and its type ("ext").
+# A Quadlet installed without an application is an application of its own...
+function quadlet_units_json {
+    "${LPOD_PODMAN_BINARY:-podman}" quadlet list --format json | jq '
+        map(. + {
+            base: (.Name | sub("\\.[^.]+$"; "")),
+            ext: (.Name | capture("\\.(?<ext>[^.]+)$").ext)
+        })
+        | map(. + {app: (if (.App // "") == "" then .base else .App end)})'
+}
+
+# Prints the source of every Quadlet in UNITS (the JSON of quadlet_units_json)
+# as JSON, with its drop-ins appended, since those can add lines such as
+# "Secret="...
+function quadlet_sources_json {
+    local UNITS="$1"
+    local NAME UNIT_PATH DROPIN
+
+    while IFS=$'\t' read -r NAME UNIT_PATH; do
+        {
+            cat "$UNIT_PATH" 2>/dev/null
+
+            for DROPIN in "$(dirname "$UNIT_PATH")/${NAME}.d"/*.conf "$(quadlet_unit_path)/${NAME}.d"/*.conf; do
+                if [ -f "$DROPIN" ] && [ "$DROPIN" != "$UNIT_PATH" ]; then
+                    echo
+                    cat "$DROPIN"
+                fi
+            done
+        } | jq -Rs --arg name "$NAME" '{name: $name, content: .}'
+    done < <(jq -r '.[] | [.Name, .Path] | @tsv' <<< "$UNITS") | jq -s 'unique_by(.name)'
+}
+
+# Prints the systemd state of the services of UNITS as JSON...
+function unit_states_json {
+    local UNITS="$1"
+    local SERVICES=()
+    local SERVICE
+
+    while IFS= read -r SERVICE; do
+        SERVICES+=("$SERVICE")
+    done < <(jq -r '.[] | select(.ext == "container" or .ext == "pod" or .ext == "kube") | .UnitName' <<< "$UNITS")
+
+    if [ ${#SERVICES[@]} -eq 0 ]; then
+        echo "[]"
+
+        return
+    fi
+
+    "${SYSTEMCTL_CMD[@]}" show "${SERVICES[@]}" --property=Id,ActiveState,SubState,Result,StateChangeTimestamp --timestamp=unix | jq -Rs '
+        split("\n\n")
+        | map(split("\n") | map(select(contains("=")) | capture("^(?<key>[^=]+)=(?<value>.*)$")) | from_entries)
+        | map(select(.Id != null))'
+}
+
+# Prints every container as JSON, with the systemd unit Quadlet runs it as...
+function containers_json {
+    "${LPOD_PODMAN_BINARY:-podman}" ps --all --format json | jq '
+        map({
+            name: .Names[0],
+            image: .Image,
+            state: .State,
+            unit: (.Labels.PODMAN_SYSTEMD_UNIT // null),
+            infra: (.IsInfra // false)
+        })'
+}
+
+# Prints the CPU and memory use of the running containers as JSON...
+function container_stats_json {
+    "${LPOD_PODMAN_BINARY:-podman}" stats --no-stream --format '{{json .}}' 2>/dev/null | jq -s 'map({name: .Name, cpu: .CPU, memory: .MemUsage})'
+}
+
+# The jq definitions that turn the collected units, sources, states,
+# containers and stats into applications...
+read -r -d '' LPOD_APPLICATIONS_JQ <<'JQ'
+def source($name): first($sources[] | select(.name == $name) | .content) // "";
+def directives($content; $key): $content | split("\n") | map(select(startswith($key + "=")) | ltrimstr($key + "=") | sub("\\s+$"; ""));
+def directive($content; $key): directives($content; $key) | last;
+def iso: if . == null or . == "" or . == "n/a" then null else (ltrimstr("@") | tonumber | strftime("%Y-%m-%dT%H:%M:%S+00:00")) end;
+def status: if . == "active" then "running" elif . == null then "unknown" else . end;
+def port: (capture("^((?<ip>.+):)?(?<host>[0-9-]+):(?<container>[0-9-]+)(/(?<protocol>[a-z]+))?$") // null)
+    | if . == null then empty else "\(.ip // "0.0.0.0"):\(.host)->\(.container)/\(.protocol // "tcp")" end;
+def image($unit): directive(source($unit.Name); "Image") as $image
+    | if $image == null then null
+      elif ($image | endswith(".build")) then (directive(source($image); "ImageTag") // $image)
+      elif ($image | endswith(".image")) then (directive(source($image); "Image") // $image)
+      else $image end;
+def container_name($unit): directive(source($unit.Name); "ContainerName") // "systemd-\($unit.base)";
+def labels($unit): if $unit == null then {} else
+    directives(source($unit.Name); "Label")
+    | map(select(startswith("io.foxws.pods.") and contains("=")) | capture("^(?<key>[^=]+)=(?<value>.*)$"))
+    | from_entries end;
+def state($unit): first($states[] | select(.Id == $unit.UnitName)) // {};
+
+def application:
+    . as $all
+    | ($all | map(select(.ext == "container"))) as $containers
+    | ($all | map(select(.ext == "pod"))) as $pods
+    | ($all | map(select(.ext == "kube"))) as $kubes
+    | (($pods | sort_by(.Name | length) | first)
+        // ($kubes | sort_by(.Name | length) | first)
+        // ($containers | sort_by(.Name | length) | first)) as $main
+    | select($main != null)
+    | (if $main.ext == "container" then $main else ($containers | sort_by(.Name | length) | first) end) as $primary
+    | ($all | map(.UnitName)) as $services
+    | ($ps | map(select(.unit as $unit | any($services[]; . == $unit)) | select(.infra | not))) as $running
+    | ($running | map(.name)) as $names
+    | ($stats | map(select(.name as $name | any($names[]; . == $name)))) as $usage
+    | state($main) as $state
+    | {
+        name: $main.app,
+        unit: $main.UnitName,
+        kind: $main.ext,
+        status: ($state.ActiveState | status),
+        result: ($state.Result // null),
+        since: ($state.StateChangeTimestamp | iso),
+        image: ((first($running[] | select(.unit == $primary.UnitName) | .image)) // (if $primary == null then null else image($primary) end)),
+        pods: (($pods | length) + ($kubes | length)),
+        containers: (if $main.ext == "kube" then ($running | length) else ($containers | length) end),
+        ports: ([($containers + $pods)[] | directives(source(.Name); "PublishPort")[] | port] | unique),
+        memory: (if ($usage | length) > 0 then ($usage | map(.memory) | add) else null end),
+        auto_update: (if $primary == null then null else directive(source($primary.Name); "AutoUpdate") end),
+        labels: (labels($primary) + labels($main))
+    }
+    + {
+        detail: {
+            path: ($main.Path | sub("/[^/]+$"; "")),
+            volumes: ($all | map(select(.ext == "volume") | {name: (directive(source(.Name); "VolumeName") // "systemd-\(.base)"), size: null})),
+            secrets: ([$containers[] | directives(source(.Name); "Secret")[] | split(",")[0]] | unique),
+            items: ($containers | map(
+                . as $unit
+                | container_name($unit) as $name
+                | (first($ps[] | select(.name == $name)) // null) as $container
+                | (first($stats[] | select(.name == $name)) // null) as $use
+                | {
+                    name: $name,
+                    image: ($container.image // image($unit)),
+                    state: ($container.state // (state($unit).ActiveState | status)),
+                    cpu: ($use.cpu // null),
+                    memory: ($use.memory // null)
+                }))
+        },
+        services: [$containers[], $pods[], $kubes[] | .UnitName]
+    };
+JQ
+
+# Prints every application as JSON, with the internal "detail" and "services"
+# keys that "lpod APP status|logs" use. Failed applications get the last
+# error their main unit logged...
+function applications_json {
+    local UNITS SOURCES STATES CONTAINERS STATS APPLICATIONS
+    UNITS="$(quadlet_units_json)" || return 1
+    SOURCES="$(quadlet_sources_json "$UNITS")"
+    STATES="$(unit_states_json "$UNITS")"
+    CONTAINERS="$(containers_json)"
+    STATS="$(container_stats_json)"
+
+    APPLICATIONS="$(jq -n \
+        --argjson units "$UNITS" \
+        --argjson sources "$SOURCES" \
+        --argjson states "$STATES" \
+        --argjson ps "$CONTAINERS" \
+        --argjson stats "${STATS:-[]}" \
+        "${LPOD_APPLICATIONS_JQ} \$units | group_by(.app) | map(application)")" || return 1
+
+    local UNIT ERRORS="{}"
+
+    while IFS= read -r UNIT; do
+        local MESSAGE
+        # shellcheck disable=SC2086
+        MESSAGE="$(journalctl ${SYSTEMD_JOURNAL_SCOPE}-u "$UNIT" --priority=err --lines=1 --output=cat --no-pager 2>/dev/null | tail -n 1)"
+        ERRORS="$(jq --arg unit "$UNIT" --arg message "$MESSAGE" '. + {($unit): (if $message == "" then null else $message end)}' <<< "$ERRORS")"
+    done < <(jq -r '.[] | select(.status == "failed") | .unit' <<< "$APPLICATIONS")
+
+    jq --argjson errors "$ERRORS" 'map(if .status == "failed" then . + {error: $errors[.unit]} else . end)' <<< "$APPLICATIONS"
+}
+
+# Prints the application NAME as JSON. NAME is an application, or one of its
+# Quadlets without the extension (the SERVICE of the other lpod commands)...
+function application_json {
+    local NAME="$1"
+    local UNITS APPLICATION
+
+    UNITS="$(quadlet_units_json)" || return 1
+    APPLICATION="$(jq -r --arg name "$NAME" 'first(.[] | select(.app == $name or .base == $name) | .app) // empty' <<< "$UNITS")"
+
+    if [ -z "$APPLICATION" ]; then
+        echo "No application or Quadlet named ${NAME} is installed." >&2
+
+        return 1
+    fi
+
+    applications_json | jq -e --arg name "$APPLICATION" 'first(.[] | select(.name == $name))' || {
+        echo "${APPLICATION} has no container, pod or kube Quadlet." >&2
+
+        return 1
+    }
+}
+
+# "lpod version --json"...
+function cmd_version_json {
+    require_jq
+
+    local PODMAN_VERSION SYSTEMD_VERSION
+    PODMAN_VERSION="$("${LPOD_PODMAN_BINARY:-podman}" version --format '{{.Client.Version}}' 2>/dev/null)"
+    SYSTEMD_VERSION="$(systemctl --version 2>/dev/null | awk 'NR == 1 { print $2 }')"
+
+    jq -n \
+        --argjson contract "$LPOD_CONTRACT" \
+        --arg lpod "${LPOD_VERSION#v}" \
+        --arg podman "$PODMAN_VERSION" \
+        --arg systemd "$SYSTEMD_VERSION" \
+        --arg scope "$(quadlet_scope)" \
+        --arg user "$(id -un)" \
+        --arg hostname "$(hostname)" \
+        '{contract: $contract, lpod: $lpod, podman: $podman, systemd: $systemd, scope: $scope, user: $user, hostname: $hostname}'
+}
+
+# "lpod apps [--json]": the installed applications, with their state...
+function cmd_apps {
+    require_jq
+
+    local APPLICATIONS
+    APPLICATIONS="$(applications_json)" || return 1
+
+    if json_requested "$@"; then
+        jq --argjson contract "$LPOD_CONTRACT" '{contract: $contract, applications: map(del(.detail, .services))}' <<< "$APPLICATIONS"
+
+        return
+    fi
+
+    jq -r '(["APPLICATION", "STATUS", "UNIT", "IMAGE"], (.[] | [.name, .status, .unit, (.image // "")])) | @tsv' <<< "$APPLICATIONS" | column -t -s $'\t'
+}
+
+# "lpod host [--json]": CPU, memory and disk use, the container counts, and
+# when "podman auto-update" runs next...
+function cmd_host {
+    require_jq
+
+    local PODMAN="${LPOD_PODMAN_BINARY:-podman}"
+    local CPU_USAGE GRAPH_ROOT DISK CONTAINERS TIMER
+
+    # Two samples of /proc/stat, a quarter second apart...
+    CPU_USAGE="$({ head -n 1 /proc/stat; sleep 0.25; head -n 1 /proc/stat; } | awk '
+        { idle = $5 + $6; total = 0; for (i = 2; i <= NF; i++) total += $i }
+        NR == 1 { idle1 = idle; total1 = total }
+        NR == 2 { if (total - total1 > 0) printf "%.1f", 100 * (1 - (idle - idle1) / (total - total1)); else print 0 }')"
+
+    GRAPH_ROOT="$("$PODMAN" info --format '{{.Store.GraphRoot}}' 2>/dev/null)"
+    DISK="$(df --block-size=1 --output=used,size "${GRAPH_ROOT:-$HOME}" 2>/dev/null | awk 'NR == 2 { print $1, $2 }')"
+    CONTAINERS="$("$PODMAN" ps --all --format '{{.State}}' 2>/dev/null | awk '{ total++ } $1 == "running" { running++ } END { print running + 0, total + 0 }')"
+    TIMER="$("${SYSTEMCTL_CMD[@]}" show podman-auto-update.timer --property=ActiveState,NextElapseUSecRealtime --timestamp=unix 2>/dev/null)"
+
+    local HOST
+    HOST="$(jq -n \
+        --argjson contract "$LPOD_CONTRACT" \
+        --argjson cores "$(nproc)" \
+        --argjson usage "${CPU_USAGE:-0}" \
+        --argjson memory "$(awk '/^MemTotal:/ { total = $2 } /^MemAvailable:/ { available = $2 } END { printf "[%d,%d]", (total - available) * 1024, total * 1024 }' /proc/meminfo)" \
+        --arg path "$GRAPH_ROOT" \
+        --argjson disk "[$(echo "${DISK:-0 0}" | tr ' ' ',')]" \
+        --argjson containers "[$(echo "$CONTAINERS" | tr ' ' ',')]" \
+        --arg timer "$TIMER" \
+        '($timer | split("\n") | map(select(contains("=")) | capture("^(?<key>[^=]+)=(?<value>.*)$")) | from_entries) as $timer
+        | {
+            contract: $contract,
+            cpu: {cores: $cores, usage: $usage},
+            memory: {used: $memory[0], total: $memory[1]},
+            disk: {path: $path, used: $disk[0], total: $disk[1]},
+            containers: {running: $containers[0], total: $containers[1]},
+            auto_update: {
+                enabled: ($timer.ActiveState == "active"),
+                next_run: (($timer.NextElapseUSecRealtime // "") | if . == "" or . == "n/a" then null else (ltrimstr("@") | tonumber | strftime("%Y-%m-%dT%H:%M:%S+00:00")) end)
+            }
+        }')" || return 1
+
+    if json_requested "$@"; then
+        echo "$HOST"
+
+        return
+    fi
+
+    jq -r '"CPU: \(.cpu.usage)% of \(.cpu.cores) cores",
+        "Memory: \(.memory.used / 1073741824 * 10 | floor / 10) of \(.memory.total / 1073741824 * 10 | floor / 10) GiB",
+        "Disk: \(.disk.used / 1073741824 * 10 | floor / 10) of \(.disk.total / 1073741824 * 10 | floor / 10) GiB (\(.disk.path))",
+        "Containers: \(.containers.running) of \(.containers.total) running",
+        "Auto-update: \(if .auto_update.enabled then "next run \(.auto_update.next_run)" else "off" end)"' <<< "$HOST"
+}
+
+# "lpod secrets [--json]": the Podman secrets with the applications whose
+# Quadlets use them, and the secrets Quadlets use that don't exist...
+function cmd_secret_list {
+    require_jq
+
+    local PODMAN="${LPOD_PODMAN_BINARY:-podman}"
+    local UNITS SOURCES IDS SECRETS="[]"
+
+    UNITS="$(quadlet_units_json)" || return 1
+    SOURCES="$(quadlet_sources_json "$UNITS")"
+    mapfile -t IDS < <("$PODMAN" secret ls --quiet)
+
+    if [ ${#IDS[@]} -gt 0 ]; then
+        SECRETS="$("$PODMAN" secret inspect "${IDS[@]}" | jq 'map({name: .Spec.Name, driver: .Spec.Driver.Name, updated_at: (.UpdatedAt | sub("\\.[0-9]+"; "") | sub("Z$"; "+00:00"))})')" || return 1
+    fi
+
+    local RESULT
+    RESULT="$(jq -n \
+        --argjson contract "$LPOD_CONTRACT" \
+        --argjson units "$UNITS" \
+        --argjson sources "$SOURCES" \
+        --argjson secrets "$SECRETS" \
+        '($units | map(select(.ext == "container")) | map(.Name as $name | {
+            app,
+            secrets: [first($sources[] | select(.name == $name) | .content) // "" | split("\n")[] | select(startswith("Secret=")) | ltrimstr("Secret=") | split(",")[0]]
+        })) as $uses
+        | def used_by($name): [$uses[] | select(any(.secrets[]; . == $name)) | .app] | unique;
+        ($secrets | map(.name)) as $existing
+        | {
+            contract: $contract,
+            secrets: ($secrets | sort_by(.name) | map(. + {used_by: used_by(.name)})),
+            missing: ([$uses[].secrets[]] | unique | map(select(. as $name | any($existing[]; . == $name) | not)) | map({name: ., used_by: used_by(.)}))
+        }')" || return 1
+
+    if json_requested "$@"; then
+        echo "$RESULT"
+
+        return
+    fi
+
+    jq -r '(["SECRET", "DRIVER", "USED BY"], (.secrets[] | [.name, .driver, (.used_by | join(", "))]), (.missing[] | [.name, "(missing)", (.used_by | join(", "))])) | @tsv' <<< "$RESULT" | column -t -s $'\t'
+}
+
+# "lpod secret create NAME [--driver file|pass|shell] [--replace] --stdin [--json]":
+# creates a secret from stdin only, so its value never shows up in the process
+# list or the shell history...
+function cmd_secret {
+    local ACTION="${1:-}"
+    shift
+
+    if [ "$ACTION" != "create" ] || [ $# -eq 0 ]; then
+        echo "Usage: lpod secret create NAME [--driver file|pass|shell] [--replace] --stdin [--json]" >&2
+
+        return 1
+    fi
+
+    local NAME="$1"
+    shift
+
+    local DRIVER="file"
+    local REPLACE=()
+    local STDIN=0
+    local JSON=0
+
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --driver) DRIVER="${2:-}"; shift ;;
+            --replace) REPLACE=(--replace) ;;
+            --stdin) STDIN=1 ;;
+            --json) JSON=1 ;;
+            *) echo "Unknown option: $1" >&2; return 1 ;;
+        esac
+
+        shift
+    done
+
+    if ! [[ "$NAME" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]{0,252}$ ]]; then
+        echo "Invalid secret name: ${NAME}. Use letters, digits, \".\", \"_\" and \"-\"." >&2
+
+        return 1
+    fi
+
+    case "$DRIVER" in
+        file|pass|shell) ;;
+        *) echo "Unknown driver: ${DRIVER}. Use file, pass or shell." >&2; return 1 ;;
+    esac
+
+    if [ "$STDIN" -eq 0 ]; then
+        echo "Pass the secret's value on stdin, with --stdin." >&2
+
+        return 1
+    fi
+
+    "${LPOD_PODMAN_BINARY:-podman}" secret create --driver "$DRIVER" "${REPLACE[@]}" "$NAME" - >/dev/null || return 1
+
+    if [ "$JSON" -eq 1 ]; then
+        json_ok
+    else
+        echo "Secret ${NAME} created."
+    fi
+}
+
+# Writes a Quadlet drop-in that gives the main container of an application a
+# secret, next to that container's Quadlet (used by "lpod APP secret add")...
+function cmd_app_secret_add {
+    local APPLICATION="$1"
+    local NAME="$2"
+    shift 2
+
+    local TYPE="env"
+    local TARGET=""
+
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --type) TYPE="${2:-}"; shift ;;
+            --target) TARGET="${2:-}"; shift ;;
+            --json) ;;
+            *) echo "Unknown option: $1" >&2; return 1 ;;
+        esac
+
+        shift
+    done
+
+    if ! [[ "$NAME" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]{0,252}$ ]]; then
+        echo "Invalid secret name: ${NAME}." >&2
+
+        return 1
+    fi
+
+    case "$TYPE" in
+        env)
+            if ! [[ "$TARGET" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
+                echo "An env secret needs --target with an environment variable name." >&2
+
+                return 1
+            fi
+            ;;
+        mount)
+            if [ -z "$TARGET" ]; then
+                TARGET="$NAME"
+            fi
+
+            if ! [[ "$TARGET" =~ ^[A-Za-z0-9_./-]+$ ]]; then
+                echo "Invalid mount target: ${TARGET}." >&2
+
+                return 1
+            fi
+            ;;
+        *)
+            echo "Unknown type: ${TYPE}. Use env or mount." >&2
+
+            return 1
+            ;;
+    esac
+
+    local UNITS CONTAINER
+    UNITS="$(quadlet_units_json)" || return 1
+    CONTAINER="$(jq -r --arg app "$APPLICATION" '
+        [.[] | select(.app == $app and .ext == "container")] | sort_by(.Name | length) | first | if . == null then empty else [.Name, .Path] | @tsv end' <<< "$UNITS")"
+
+    if [ -z "$CONTAINER" ]; then
+        echo "${APPLICATION} has no container Quadlet to add the secret to." >&2
+
+        return 1
+    fi
+
+    local UNIT_NAME="${CONTAINER%%$'\t'*}"
+    local UNIT_PATH="${CONTAINER#*$'\t'}"
+    local DROPIN_PATH
+    DROPIN_PATH="$(dirname "$UNIT_PATH")/${UNIT_NAME}.d"
+
+    mkdir -p "$DROPIN_PATH" || return 1
+    printf '[Container]\nSecret=%s,type=%s,target=%s\n' "$NAME" "$TYPE" "$TARGET" > "${DROPIN_PATH}/lpod-secret-${NAME}.conf" || return 1
+    "${SYSTEMCTL_CMD[@]}" daemon-reload || return 1
+
+    json_ok
+}
+
+# The "--json" commands of an application: "lpod APP status|files|logs|up|
+# down|restart|secret add ... --json"...
+function cmd_app_json {
+    require_jq
+
+    local NAME="$1"
+    local COMMAND="$2"
+    shift 2
+
+    local APPLICATION
+    APPLICATION="$(application_json "$NAME")" || return 1
+
+    case "$COMMAND" in
+        status)
+            jq --argjson contract "$LPOD_CONTRACT" '{contract: $contract, application: (. + .detail | del(.detail, .services))}' <<< "$APPLICATION"
+            ;;
+
+        files)
+            local UNITS
+            UNITS="$(quadlet_units_json)" || return 1
+
+            local FILES=()
+            local FILE_NAME FILE_PATH DROPIN
+
+            # shellcheck disable=SC2094
+            while IFS=$'\t' read -r FILE_NAME FILE_PATH; do
+                FILES+=("$(jq -Rs --arg name "$FILE_NAME" --arg path "$FILE_PATH" '{name: $name, path: $path, content: .}' < "$FILE_PATH")")
+
+                for DROPIN in "$(dirname "$FILE_PATH")/${FILE_NAME}.d"/*.conf; do
+                    if [ -f "$DROPIN" ]; then
+                        FILES+=("$(jq -Rs --arg name "${FILE_NAME}.d/$(basename "$DROPIN")" --arg path "$DROPIN" '{name: $name, path: $path, content: .}' < "$DROPIN")")
+                    fi
+                done
+            done < <(jq -r --arg app "$(jq -r '.name' <<< "$APPLICATION")" '.[] | select(.app == $app) | [.Name, .Path] | @tsv' <<< "$UNITS")
+
+            printf '%s\n' "${FILES[@]}" | jq -s --argjson contract "$LPOD_CONTRACT" '{contract: $contract, files: .}'
+            ;;
+
+        logs)
+            local LINES=100
+            local SINCE=()
+
+            while [ $# -gt 0 ]; do
+                case "$1" in
+                    --lines) LINES="${2:-}"; shift ;;
+                    --since) SINCE=(--since "${2:-}"); shift ;;
+                    --json) ;;
+                    *) echo "Unknown option: $1" >&2; return 1 ;;
+                esac
+
+                shift
+            done
+
+            if ! [[ "$LINES" =~ ^[1-9][0-9]{0,4}$ ]]; then
+                echo "--lines takes a number from 1 to 99999." >&2
+
+                return 1
+            fi
+
+            local UNIT_ARGS=()
+            local UNIT
+
+            while IFS= read -r UNIT; do
+                UNIT_ARGS+=(--unit "$UNIT")
+            done < <(jq -r '.services[]' <<< "$APPLICATION")
+
+            # shellcheck disable=SC2086
+            journalctl ${SYSTEMD_JOURNAL_SCOPE} "${UNIT_ARGS[@]}" --lines="$LINES" "${SINCE[@]}" --output=json --no-pager | jq -s --argjson contract "$LPOD_CONTRACT" '{
+                contract: $contract,
+                entries: map({
+                    time: (.__REALTIME_TIMESTAMP | tonumber / 1000000 | floor | strftime("%Y-%m-%dT%H:%M:%S+00:00")),
+                    unit: (((._SYSTEMD_USER_UNIT // ._SYSTEMD_UNIT) as $unit | if $unit == null or $unit == "init.scope" or ($unit | startswith("user@")) then (.USER_UNIT // .UNIT // $unit) else $unit end) // "" | sub("\\.service$"; "")),
+                    priority: ((.PRIORITY // "6") | tonumber),
+                    message: ((.MESSAGE // "") | if type == "array" then implode else . end | rtrimstr("\n"))
+                })
+            }'
+            ;;
+
+        up|down|restart)
+            local NO_BLOCK=()
+            local ARG
+
+            for ARG in "$@"; do
+                if [ "$ARG" == "--no-block" ]; then
+                    NO_BLOCK=(--no-block)
+                fi
+            done
+
+            case "$COMMAND" in
+                up) "${SYSTEMCTL_CMD[@]}" "${NO_BLOCK[@]}" start "$(jq -r '.unit' <<< "$APPLICATION")" || return 1 ;;
+                restart) "${SYSTEMCTL_CMD[@]}" "${NO_BLOCK[@]}" restart "$(jq -r '.unit' <<< "$APPLICATION")" || return 1 ;;
+                # Every service of the application stops, not just the main
+                # one, since siblings don't always stop with it...
+                down) local SERVICES; mapfile -t SERVICES < <(jq -r '.services[]' <<< "$APPLICATION"); "${SYSTEMCTL_CMD[@]}" "${NO_BLOCK[@]}" stop "${SERVICES[@]}" || return 1 ;;
+            esac
+
+            json_ok
+            ;;
+
+        secret)
+            if [ "${1:-}" != "add" ] || [ -z "${2:-}" ]; then
+                echo "Usage: lpod APP secret add NAME --type env|mount --target TARGET --json" >&2
+
+                return 1
+            fi
+
+            cmd_app_secret_add "$(jq -r '.name' <<< "$APPLICATION")" "$2" "${@:3}"
+            ;;
+
+        *)
+            echo "lpod ${NAME} ${COMMAND} has no JSON output." >&2
+
+            return 1
+            ;;
+    esac
+}
+
 # Where "podman:generate" wrote rendered ".quadlets" files, matching the
 # "publish_path" config key (default "podman")...
 export LPOD_PUBLISH_PATH=${LPOD_PUBLISH_PATH:-"podman"}
@@ -881,7 +1523,48 @@ case "$1" in
         cmd_self_update "$@"
         exit $?
         ;;
+
+    version)
+        cmd_version_json
+        exit $?
+        ;;
+
+    apps)
+        shift
+        cmd_apps "$@"
+        exit $?
+        ;;
+
+    host)
+        shift
+        cmd_host "$@"
+        exit $?
+        ;;
+
+    secrets)
+        shift
+        cmd_secret_list "$@"
+        exit $?
+        ;;
+
+    secret)
+        shift
+        cmd_secret "$@"
+        exit $?
+        ;;
 esac
+
+# An application's "--json" commands take an application name, and run
+# before the ".env" of the current directory is sourced, since tools such as
+# Pods run them over SSH from the home directory...
+if [ $# -ge 2 ] && json_requested "$@"; then
+    case "$2" in
+        status|files|logs|up|down|restart|secret)
+            cmd_app_json "$@"
+            exit $?
+            ;;
+    esac
+fi
 
 SERVICE="$1"
 shift
