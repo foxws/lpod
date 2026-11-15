@@ -1442,9 +1442,11 @@ function cmd_app_json {
 
             local IMAGE
 
+            # Images built on the host ("localhost/...") have no registry to
+            # pull from, so only the restart picks up a rebuild...
             while IFS= read -r IMAGE; do
                 "${LPOD_PODMAN_BINARY:-podman}" pull --quiet "$IMAGE" > /dev/null || return 1
-            done < <(jq -r '[.detail.items[].image | select(. != null)] | unique[]' <<< "$APPLICATION")
+            done < <(jq -r '[.detail.items[].image | select(. != null and (startswith("localhost/") | not))] | unique[]' <<< "$APPLICATION")
 
             "${SYSTEMCTL_CMD[@]}" restart "$(jq -r '.unit' <<< "$APPLICATION")" || return 1
 
