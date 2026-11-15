@@ -104,13 +104,13 @@ function verify {
 # Warns about what commonly keeps rootless Quadlet services from working...
 function check_podman {
     if ! command -v podman >/dev/null 2>&1; then
-        warn "Podman isn't installed yet. lpod needs Podman 5.3 or later."
+        warn "Podman isn't installed yet. lpod needs Podman 6.0 or later."
 
         return 0
     fi
 
     if ! podman quadlet --help >/dev/null 2>&1; then
-        warn "\"podman quadlet\" isn't available. lpod needs Podman 5.3 or later."
+        warn "\"podman quadlet\" isn't available. lpod needs Podman 6.0 or later."
     fi
 
     if [ "$(id -u)" -ne 0 ]; then

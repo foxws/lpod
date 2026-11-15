@@ -1,0 +1,54 @@
+{
+    "contract": 1,
+    "application": {
+        "name": "immich",
+        "unit": "immich-pod.service",
+        "kind": "pod",
+        "status": "running",
+        "result": "success",
+        "since": "2026-11-09T10:42:00+00:00",
+        "image": "ghcr.io/immich-app/immich-server:v2.3.1",
+        "pods": 1,
+        "containers": 4,
+        "ports": ["0.0.0.0:2283->2283/tcp"],
+        "memory": 2254857830,
+        "auto_update": "registry",
+        "labels": {
+            "io.foxws.pods.description": "Self-hosted photo library",
+            "io.foxws.pods.url": "https://photos.home.arpa"
+        },
+        "path": "/home/blue/.config/containers/systemd/immich",
+        "volumes": [{ "name": "immich-library", "size": 227633266688 }],
+        "secrets": ["immich-db-password"],
+        "items": [
+            {
+                "name": "immich-server",
+                "image": "ghcr.io/immich-app/immich-server:v2.3.1",
+                "state": "running",
+                "cpu": 6.2,
+                "memory": 1288490188
+            },
+            {
+                "name": "immich-ml",
+                "image": "ghcr.io/immich-app/immich-machine-learning:v2.3.1",
+                "state": "running",
+                "cpu": 2.8,
+                "memory": 671088640
+            },
+            {
+                "name": "immich-postgres",
+                "image": "ghcr.io/immich-app/postgres:16-vectorchord",
+                "state": "running",
+                "cpu": 0.9,
+                "memory": 220200960
+            },
+            {
+                "name": "immich-valkey",
+                "image": "docker.io/valkey/valkey:8",
+                "state": "running",
+                "cpu": 0.3,
+                "memory": 25165824
+            }
+        ]
+    }
+}

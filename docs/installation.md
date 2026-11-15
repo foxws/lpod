@@ -15,10 +15,10 @@ It installs `lpod` and `lpod-setup` to `~/.local/bin` (`/usr/local/bin` as root)
 
 The installer:
 - **Checks the downloads.** Each one is verified against the release's `SHA256SUMS` before anything is replaced. A failed download or checksum leaves your current install as it was.
-- **Warns about common setup problems.** It warns when `podman quadlet` isn't available (Podman 5.3 or later is needed), and when your user has no `/etc/subuid` or `/etc/subgid` range for rootless Podman.
+- **Warns about common setup problems.** It warns when `podman quadlet` isn't available (Podman 6.0 or later is needed), and when your user has no `/etc/subuid` or `/etc/subgid` range for rootless Podman.
 - **Never runs half a script.** Everything runs from the last line, so a download that's cut off doesn't run part of the installer.
 
-`lpod` is a single bash script with no other dependencies. It doesn't need PHP or Composer.
+`lpod` is a single bash script. It doesn't need PHP or Composer. Its `--json` commands, which tools such as Pods run, need [jq](https://jqlang.org).
 
 | Variable | Default | Description |
 | --- | --- | --- |

@@ -129,6 +129,30 @@ lpod idle disable my-app
 
 Workers you listed in `LPOD_IDLE_WORKERS` go in `PODMAN_ONDEMAND_IDLE_WORKERS` now. `lpod idle enable` only prints how to install the socket.
 
+## JSON contract
+
+Tools such as Pods manage a host by running these commands over SSH. With `--json`, each one prints a single JSON object with a `contract` key, the version of the shapes below. A tool refuses a contract it doesn't know, and a breaking change to any of them bumps it. They need [jq](https://jqlang.org).
+
+| Command | Prints |
+| --- | --- |
+| `lpod version --json` | `contract`, `lpod`, `podman`, `systemd`, `scope` (`rootless` or `rootful`), `user` and `hostname` |
+| `lpod apps [--json]` | `applications`: each installed application with its main unit, `kind`, `status`, `result`, `since`, `image`, `ports`, `memory`, `auto_update`, its `io.foxws.pods.*` labels, and the last `error` of a failed one |
+| `lpod host [--json]` | `cpu`, `memory`, `disk` (of Podman's graph root), `containers` and `auto_update` (the next `podman-auto-update.timer` run) |
+| `lpod secrets [--json]` | `secrets` with the applications whose Quadlets use them (`used_by`), and the `missing` ones that Quadlets use but don't exist |
+| `lpod secret create NAME --stdin [--driver file\|pass\|shell] [--replace] [--json]` | `{"ok": true}`. The value comes from stdin only, never the command line |
+| `lpod APP status --json` | `application`: what `apps` prints, plus its `path`, `volumes`, `secrets` and containers (`items`) with their CPU and memory use |
+| `lpod APP files --json` | `files`: the application's Quadlets and their drop-ins, with their contents |
+| `lpod APP logs --json [--lines N] [--since TIME]` | `entries`: the journal of the application's units, as `time`, `unit`, `priority` and `message` |
+| `lpod APP up\|down\|restart --json [--no-block]` | `{"ok": true}`. `up` and `restart` act on the main unit, `down` stops every unit of the application. With `--no-block`, it returns without waiting for systemd |
+| `lpod APP redeploy --json [--no-block]` | `{"ok": true}`. Pulls every image the application's containers use, except ones built on the host (`localhost/...`), then restarts its main unit. With `--no-block`, a transient unit, `lpod-redeploy-APP`, does the work and logs to the journal |
+| `lpod APP secret add NAME --type env\|mount --target TARGET --json` | `{"ok": true}`. Writes the drop-in `lpod-secret-NAME.conf` for the application's main container, next to its Quadlet |
+
+An application is what `podman quadlet install --application` (or `lpod install`) grouped the Quadlets under. `APP` is its name, or the name of one of its Quadlets without the extension. Its main unit is its pod, or else its kube, or else the container with the shortest name. A Quadlet installed without an application is an application of its own.
+
+On failure, the commands print the reason on stderr and exit with an error. Volume sizes are `null` for now, because working them out takes too long for a page load.
+
+The `tests/fixtures/contract-1` folder holds an example payload for each command.
+
 ## Troubleshooting
 
 | Command       | Description                                                          |
@@ -137,7 +161,8 @@ Workers you listed in `LPOD_IDLE_WORKERS` go in `PODMAN_ONDEMAND_IDLE_WORKERS` n
 
 `lpod doctor` checks:
 
-- that Podman runs and has the `podman quadlet` command (Podman 5.6 or newer);
+- that Podman 6.0 or newer runs, with the `podman quadlet` command;
+- that jq is installed, for the [JSON commands](#json-contract);
 - that the systemd manager is reachable;
 - for rootless services: linger, your entries in `/etc/subuid` and `/etc/subgid`, and whether containers may publish ports 80 and 443 for the proxy (`net.ipv4.ip_unprivileged_port_start`);
 - that no app still uses the [idle check](#moving-from-lpod-v2) of lpod releases before v3;
@@ -151,17 +176,18 @@ It changes nothing. It prints how to fix each problem, and the commands that nee
 
 ```json
 {
-  "lpod": "2.3.0",
+  "contract": 1,
+  "lpod": "4.0.0",
   "failures": 0,
   "warnings": 1,
   "checks": [
-    { "id": "podman", "status": "ok", "message": "Podman 5.6.1 with Quadlet", "fix": "" },
+    { "id": "podman", "status": "ok", "message": "Podman 6.1.3 with Quadlet", "fix": "" },
     { "id": "linger", "status": "warn", "message": "Linger is off, so services stop when you log out and don't start at boot", "fix": "loginctl enable-linger me" }
   ]
 }
 ```
 
-The ids are `podman`, `systemd`, `linger`, `subids`, `ports`, `idle-timers`, `proxy-certificate`, `app-url` and `failed-services`. Checks that don't apply, such as the rootless ones when running as root, are left out.
+The ids are `podman`, `jq`, `systemd`, `linger`, `subids`, `ports`, `idle-timers`, `proxy-certificate`, `app-url` and `failed-services`. Checks that don't apply, such as the rootless ones when running as root, are left out.
 
 ## Updating
 

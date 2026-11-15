@@ -1,0 +1,8 @@
+{
+    "contract": 1,
+    "cpu": { "cores": 8, "usage": 18.2 },
+    "memory": { "used": 6871947674, "total": 17179869184 },
+    "disk": { "path": "/home/blue/.local/share/containers/storage", "used": 44023414784, "total": 128849018880 },
+    "containers": { "running": 12, "total": 14 },
+    "auto_update": { "enabled": true, "next_run": "2026-11-15T15:00:00+00:00" }
+}

@@ -1,0 +1,15 @@
+{
+    "contract": 1,
+    "files": [
+        {
+            "name": "immich-server.container",
+            "path": "/home/blue/.config/containers/systemd/immich/immich-server.container",
+            "content": "[Container]\nContainerName=immich-server\nImage=ghcr.io/immich-app/immich-server:v2.3.1\nPod=immich.pod\nAutoUpdate=registry\nSecret=immich-db-password,type=env,target=DB_PASSWORD\nVolume=immich-library.volume:/data\nEnvironmentFile=immich.env\n\n[Service]\nRestart=always\n\n[Install]\nWantedBy=default.target\n"
+        },
+        {
+            "name": "immich.pod",
+            "path": "/home/blue/.config/containers/systemd/immich/immich.pod",
+            "content": "[Pod]\nPodName=immich\nPublishPort=2283:2283\n"
+        }
+    ]
+}
