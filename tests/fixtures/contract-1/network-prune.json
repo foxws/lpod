@@ -1,0 +1,5 @@
+{
+    "contract": 1,
+    "removed": ["iot"],
+    "reclaimed": null
+}

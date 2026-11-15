@@ -146,10 +146,30 @@ Tools such as Pods manage a host by running these commands over SSH. With `--jso
 | `lpod APP up\|down\|restart --json [--no-block]` | `{"ok": true}`. `up` and `restart` act on the main unit, `down` stops every unit of the application. With `--no-block`, it returns without waiting for systemd |
 | `lpod APP redeploy --json [--no-block]` | `{"ok": true}`. Pulls every image the application's containers use, except ones built on the host (`localhost/...`), then restarts its main unit. With `--no-block`, a transient unit, `lpod-redeploy-APP`, does the work and logs to the journal |
 | `lpod APP secret add NAME --type env\|mount --target TARGET --json` | `{"ok": true}`. Writes the drop-in `lpod-secret-NAME.conf` for the application's main container, next to its Quadlet |
+| `lpod secret rm NAME [--json]` | `{"ok": true}` |
+| `lpod APP remove --json [--volumes] [--images] [--secrets]` | `{"ok": true}`. Stops the application and removes its Quadlets. With the flags, also its volumes, and the images and secrets no other application uses |
+| `lpod containers --json` | `containers`: every container, managed by Quadlet or not, with its `state`, `health`, `exit_code`, `application`, `quadlet`, `unit`, `pod`, `ports`, CPU and memory use and `started_at` |
+| `lpod container NAME inspect --json` | `container`: what `containers` prints, plus `created_at`, `memory_limit`, `restart_policy`, `restarts`, `user`, `auto_update`, `digest`, `health_check`, `mounts`, `networks`, `secrets` (where each is exposed, never its value) and `environment` (the Quadlet's `Environment=` lines) |
+| `lpod container NAME logs --json [--lines N]` | `entries`, like `APP logs`. Containers outside Quadlet are read from `podman logs` |
+| `lpod container NAME start\|stop\|restart --json` | `{"ok": true}`. Goes through the container's systemd unit when it has one, without waiting for it |
+| `lpod images --json` | `images`: one per image, with `repository`, `tag`, `size`, `created_at`, the applications that use it (`used_by`), its number of `containers`, `dangling`, `auto_update`, and `update` when the last `auto-update --dry-run` found one |
+| `lpod image pull REF --json`, `lpod image rm ID --json` | `{"ok": true}`. `rm` only takes an image ID |
+| `lpod images prune --json` | `removed` (image IDs) and `reclaimed` (bytes): removes every image no container uses |
+| `lpod auto-update --dry-run --json` | `{"ok": true}`. Asks the registries which images have an update, for `images` |
+| `lpod volumes --json` | `volumes`: named, NFS and anonymous volumes and bind mounts, with their `quadlet`, `driver`, `mountpoint`, `type`, `containers` and `applications`. `size` is `null` for now |
+| `lpod volume rm NAME --json`, `lpod volumes prune --json` | `{"ok": true}`, or `removed` and `reclaimed` (`null`) for `prune` |
+| `lpod networks --json` | `networks` with their `quadlet`, `driver`, `subnet`, `gateway`, `dns`, `internal`, `ipv6`, number of `containers`, `applications` and whether they're the `default` |
+| `lpod network rm NAME --json`, `lpod networks prune --json` | `{"ok": true}`, or `removed` and `reclaimed` (`null`) for `prune` |
+| `lpod journal --json [--lines N] [--since TIME\|boot] [--priority N]` | `entries`, like `APP logs`, for every unit the installed Quadlets generate and `podman-auto-update.service` |
+| `lpod quadlet check --stdin --json` | `valid`, `errors` and the `units` the files generate, from the Quadlet generator's `-dryrun`, next to the installed Quadlets |
+| `lpod quadlet install APP --stdin --json [--replace] [--start]` | `{"ok": true}`. Installs the files as the application `APP` with `podman quadlet install --application`. `--start` starts its units without waiting |
+| `lpod quadlet fetch URL --ref REF --json [--path DIR]` | `commit` and `files` (name and content) of a directory of a Git repository, without installing them. Takes `https://`, `ssh://` and `git@` URLs |
 
 An application is what `podman quadlet install --application` (or `lpod install`) grouped the Quadlets under. `APP` is its name, or the name of one of its Quadlets without the extension. Its main unit is its pod, or else its kube, or else the container with the shortest name. A Quadlet installed without an application is an application of its own.
 
 On failure, the commands print the reason on stderr and exit with an error. Volume sizes are `null` for now, because working them out takes too long for a page load.
+
+`quadlet check` and `quadlet install` read `{"files": [{"name": ..., "content": ...}]}` on stdin. File names are plain Quadlet file names, so nothing is written outside the Quadlet directory. The commands for containers, images, volumes, networks, the journal and Quadlet files only answer with `--json`, so the same words stay free as service names.
 
 The `tests/fixtures/contract-1` folder holds an example payload for each command.
 

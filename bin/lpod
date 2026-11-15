@@ -148,6 +148,20 @@ function display_help {
     echo "  ${GREEN}lpod APP status|files|logs --json${NC}       An application's details, Quadlet files or journal ([--lines N] [--since T])"
     echo "  ${GREEN}lpod APP up|down|restart --json${NC}         Start, stop or restart an application ([--no-block])"
     echo "  ${GREEN}lpod APP secret add NAME --json${NC}         Give an application a secret (--type env|mount --target TARGET)"
+    echo "  ${GREEN}lpod APP redeploy --json${NC}                Pull an application's images and restart it ([--no-block])"
+    echo "  ${GREEN}lpod APP remove --json${NC}                  Remove an application ([--volumes] [--images] [--secrets])"
+    echo "  ${GREEN}lpod containers --json${NC}                  Every container, managed by Quadlet or not"
+    echo "  ${GREEN}lpod container NAME ACTION --json${NC}       Inspect, show the logs of, start, stop or restart a container"
+    echo "  ${GREEN}lpod images [prune] --json${NC}              Images, or remove the ones no container uses"
+    echo "  ${GREEN}lpod image pull REF|rm ID --json${NC}        Pull or remove an image"
+    echo "  ${GREEN}lpod auto-update --dry-run --json${NC}       Check the registries for image updates"
+    echo "  ${GREEN}lpod volumes|networks [prune] --json${NC}    Volumes or networks, or remove the unused ones"
+    echo "  ${GREEN}lpod volume|network rm NAME --json${NC}      Remove a volume or network"
+    echo "  ${GREEN}lpod journal --json${NC}                     The journal of every Quadlet unit ([--lines N] [--since T|boot] [--priority N])"
+    echo "  ${GREEN}lpod quadlet check --stdin --json${NC}       Check Quadlet files with a dry run"
+    echo "  ${GREEN}lpod quadlet install APP --stdin --json${NC} Install Quadlet files as an application ([--replace] [--start])"
+    echo "  ${GREEN}lpod quadlet fetch URL --ref REF --json${NC} List the files of a Git repository directory ([--path DIR])"
+    echo "  ${GREEN}lpod secret rm NAME [--json]${NC}            Remove a secret"
     echo
     echo "${YELLOW}Troubleshooting:${NC}"
     echo "  ${GREEN}lpod doctor [--json]${NC}            Check the host for what the services need, and how to fix what's missing"
@@ -1175,12 +1189,32 @@ function cmd_secret_list {
     jq -r '(["SECRET", "DRIVER", "USED BY"], (.secrets[] | [.name, .driver, (.used_by | join(", "))]), (.missing[] | [.name, "(missing)", (.used_by | join(", "))])) | @tsv' <<< "$RESULT" | column -t -s $'\t'
 }
 
-# "lpod secret create NAME [--driver file|pass|shell] [--replace] --stdin [--json]":
+# "lpod secret create NAME [--driver file|pass|shell] [--replace] --stdin [--json]"
+# and "lpod secret rm NAME [--json]". "create"
 # creates a secret from stdin only, so its value never shows up in the process
 # list or the shell history...
 function cmd_secret {
     local ACTION="${1:-}"
     shift
+
+    # "lpod secret rm NAME [--json]"...
+    if [ "$ACTION" == "rm" ]; then
+        if ! [[ "${1:-}" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]{0,252}$ ]]; then
+            echo "Usage: lpod secret rm NAME [--json]" >&2
+
+            return 1
+        fi
+
+        "${LPOD_PODMAN_BINARY:-podman}" secret rm "$1" > /dev/null || return 1
+
+        if json_requested "$@"; then
+            json_ok
+        else
+            echo "Secret ${1} removed."
+        fi
+
+        return
+    fi
 
     if [ "$ACTION" != "create" ] || [ $# -eq 0 ]; then
         echo "Usage: lpod secret create NAME [--driver file|pass|shell] [--replace] --stdin [--json]" >&2
@@ -1363,11 +1397,7 @@ function cmd_app_json {
                 shift
             done
 
-            if ! [[ "$LINES" =~ ^[1-9][0-9]{0,4}$ ]]; then
-                echo "--lines takes a number from 1 to 99999." >&2
-
-                return 1
-            fi
+            valid_lines "$LINES" || return 1
 
             local UNIT_ARGS=()
             local UNIT
@@ -1376,16 +1406,10 @@ function cmd_app_json {
                 UNIT_ARGS+=(--unit "$UNIT")
             done < <(jq -r '.services[]' <<< "$APPLICATION")
 
-            # shellcheck disable=SC2086
-            journalctl ${SYSTEMD_JOURNAL_SCOPE} "${UNIT_ARGS[@]}" --lines="$LINES" "${SINCE[@]}" --output=json --no-pager | jq -s --argjson contract "$LPOD_CONTRACT" '{
-                contract: $contract,
-                entries: map({
-                    time: (.__REALTIME_TIMESTAMP | tonumber / 1000000 | floor | strftime("%Y-%m-%dT%H:%M:%S+00:00")),
-                    unit: (((._SYSTEMD_USER_UNIT // ._SYSTEMD_UNIT) as $unit | if $unit == null or $unit == "init.scope" or ($unit | startswith("user@")) then (.USER_UNIT // .UNIT // $unit) else $unit end) // "" | sub("\\.service$"; "")),
-                    priority: ((.PRIORITY // "6") | tonumber),
-                    message: ((.MESSAGE // "") | if type == "array" then implode else . end | rtrimstr("\n"))
-                })
-            }'
+            local ENTRIES
+            ENTRIES="$(journal_entries_json "${UNIT_ARGS[@]}" --lines="$LINES" "${SINCE[@]}")" || return 1
+
+            jq --argjson contract "$LPOD_CONTRACT" '{contract: $contract, entries: .}' <<< "$ENTRIES"
             ;;
 
         up|down|restart)
@@ -1453,6 +1477,10 @@ function cmd_app_json {
             json_ok
             ;;
 
+        remove)
+            cmd_app_remove_json "$(jq -r '.name' <<< "$APPLICATION")" "$@"
+            ;;
+
         secret)
             if [ "${1:-}" != "add" ] || [ -z "${2:-}" ]; then
                 echo "Usage: lpod APP secret add NAME --type env|mount --target TARGET --json" >&2
@@ -1469,6 +1497,894 @@ function cmd_app_json {
             return 1
             ;;
     esac
+}
+
+# Turns "journalctl --output=json" lines on stdin into contract entries...
+read -r -d '' LPOD_JOURNAL_JQ <<'JQ'
+map({
+    time: (.__REALTIME_TIMESTAMP | tonumber / 1000000 | floor | strftime("%Y-%m-%dT%H:%M:%S+00:00")),
+    unit: (((._SYSTEMD_USER_UNIT // ._SYSTEMD_UNIT) as $unit | if $unit == null or $unit == "init.scope" or ($unit | startswith("user@")) then (.USER_UNIT // .UNIT // $unit) else $unit end) // "" | sub("\\.service$"; "")),
+    priority: ((.PRIORITY // "6") | tonumber),
+    message: ((.MESSAGE // "") | if type == "array" then implode else . end | rtrimstr("\n"))
+})
+JQ
+
+# Prints the journal entries for the journalctl ARGS as a JSON array...
+function journal_entries_json {
+    local SCOPE=()
+
+    if [ "$SYSTEMD_SCOPE" == "user" ]; then
+        SCOPE=(--user)
+    fi
+
+    journalctl "${SCOPE[@]}" "$@" --output=json --no-pager | jq -s "$LPOD_JOURNAL_JQ"
+}
+
+# Checks that a "--lines" value is a number from 1 to 99999...
+function valid_lines {
+    if ! [[ "$1" =~ ^[1-9][0-9]{0,4}$ ]]; then
+        echo "--lines takes a number from 1 to 99999." >&2
+
+        return 1
+    fi
+}
+
+# Checks that NAME is a plain Podman object name, never an option or a path...
+function valid_name {
+    if ! [[ "$1" =~ ^[A-Za-z0-9][A-Za-z0-9_.@-]{0,252}$ ]]; then
+        echo "Invalid name: ${1}." >&2
+
+        return 1
+    fi
+}
+
+# Prints "podman container inspect" of every container as JSON...
+function container_inspect_all_json {
+    local PODMAN="${LPOD_PODMAN_BINARY:-podman}"
+    local IDS
+
+    mapfile -t IDS < <("$PODMAN" ps --all --quiet)
+
+    if [ ${#IDS[@]} -eq 0 ]; then
+        echo "[]"
+
+        return
+    fi
+
+    "$PODMAN" container inspect "${IDS[@]}"
+}
+
+# Prints every container, managed by Quadlet or not, as the contract's
+# "containers" list...
+function host_containers_json {
+    local UNITS PS STATS
+    UNITS="$(quadlet_units_json)" || return 1
+    PS="$("${LPOD_PODMAN_BINARY:-podman}" ps --all --format json)" || return 1
+    STATS="$(container_stats_json)"
+
+    jq -n \
+        --argjson units "$UNITS" \
+        --argjson ps "$PS" \
+        --argjson stats "${STATS:-[]}" '
+        def iso: if . == null or . == 0 then null else (tonumber | strftime("%Y-%m-%dT%H:%M:%S+00:00")) end;
+        $ps
+        | map(select((.IsInfra // false) | not))
+        | map(
+            . as $container
+            | (.Labels.PODMAN_SYSTEMD_UNIT // null) as $unit_name
+            | (if $unit_name == null then null else first($units[] | select(.UnitName == $unit_name)) end) as $unit
+            | (first($stats[] | select(.name == $container.Names[0])) // null) as $use
+            | {
+                id: (.Id[0:12]),
+                name: .Names[0],
+                image: .Image,
+                state: .State,
+                health: ((.Status // "") | capture("\\((?<health>healthy|unhealthy|starting)\\)").health // null),
+                exit_code: (if .State == "exited" then .ExitCode else null end),
+                application: ($unit.app // null),
+                quadlet: ($unit.Name // null),
+                unit: (if $unit == null then null else $unit_name end),
+                pod: (if (.PodName // "") == "" then null else .PodName end),
+                ports: [(.Ports // [])[] | "\(if (.host_ip // "") == "" then "0.0.0.0" else .host_ip end):\(.host_port)->\(.container_port)/\(.protocol // "tcp")"],
+                cpu: (if .State == "running" then ($use.cpu // null) else null end),
+                memory: (if .State == "running" then ($use.memory // null) else null end),
+                started_at: (if .State == "running" then (.StartedAt | iso) else null end)
+            })
+        | sort_by(.application == null, .application, .name)'
+}
+
+# "lpod containers --json"...
+function cmd_containers_json {
+    require_jq
+
+    local CONTAINERS
+    CONTAINERS="$(host_containers_json)" || return 1
+
+    jq --argjson contract "$LPOD_CONTRACT" '{contract: $contract, containers: .}' <<< "$CONTAINERS"
+}
+
+# "lpod container NAME inspect|logs|start|stop|restart --json"...
+function cmd_container_json {
+    require_jq
+
+    local NAME="${1:-}"
+    local ACTION="${2:-}"
+    shift 2 || true
+
+    valid_name "$NAME" || return 1
+
+    local CONTAINERS SUMMARY
+    CONTAINERS="$(host_containers_json)" || return 1
+    SUMMARY="$(jq -e --arg name "$NAME" 'first(.[] | select(.name == $name or .id == $name))' <<< "$CONTAINERS")" || {
+        echo "No container named ${NAME}." >&2
+
+        return 1
+    }
+
+    local UNIT
+    UNIT="$(jq -r '.unit // empty' <<< "$SUMMARY")"
+
+    case "$ACTION" in
+        inspect)
+            local INSPECT SOURCE="" RESTARTS
+            INSPECT="$("${LPOD_PODMAN_BINARY:-podman}" container inspect "$NAME")" || return 1
+
+            local QUADLET
+            QUADLET="$(jq -r '.quadlet // empty' <<< "$SUMMARY")"
+
+            if [ -n "$QUADLET" ]; then
+                local UNITS
+                UNITS="$(quadlet_units_json)" || return 1
+                SOURCE="$(quadlet_sources_json "$(jq --arg name "$QUADLET" 'map(select(.Name == $name))' <<< "$UNITS")" | jq -r '.[0].content // ""')"
+            fi
+
+            if [ -n "$UNIT" ]; then
+                RESTARTS="$("${SYSTEMCTL_CMD[@]}" show "$UNIT" --property=NRestarts --value 2>/dev/null)"
+            fi
+
+            jq -n \
+                --argjson contract "$LPOD_CONTRACT" \
+                --argjson summary "$SUMMARY" \
+                --argjson inspect "$INSPECT" \
+                --arg source "$SOURCE" \
+                --arg restarts "${RESTARTS:-}" '
+                def directives($key): $source | split("\n") | map(select(startswith($key + "=")) | ltrimstr($key + "=") | sub("\\s+$"; ""));
+                def time: if . == null or . == "" or (startswith("0001-")) then null else sub("\\.[0-9]+"; "") end;
+                def unquote: if (startswith("\"") and endswith("\"")) then .[1:-1] else . end;
+                ($inspect[0]) as $c
+                | ($c.Config.Healthcheck // null) as $check
+                | {
+                    contract: $contract,
+                    container: ($summary + {
+                        created_at: ($c.Created | time),
+                        memory_limit: (if ($c.HostConfig.Memory // 0) > 0 then $c.HostConfig.Memory else null end),
+                        restart_policy: (if $source != "" then (directives("Restart") | last // "no") else ($c.HostConfig.RestartPolicy.Name // null | if . == "" then null else . end) end),
+                        restarts: (if $restarts != "" then ($restarts | tonumber) else ($c.RestartCount // 0) end),
+                        user: ($c.Config.User // "" | if . == "" then null else . end),
+                        auto_update: ($c.Config.Labels["io.containers.autoupdate"] // null),
+                        digest: ($c.ImageDigest // null),
+                        health_check: (if $check == null or ($check.Test // []) == [] or $check.Test[0] == "NONE" then null else {
+                            command: ($check.Test[1:] | join(" ")),
+                            interval: (if ($check.Interval // 0) > 0 then "\($check.Interval / 1000000000 | floor)s" else null end),
+                            last_check: (($c.State.Health.Log // []) | last | .End // null | time)
+                        } end),
+                        mounts: [($c.Mounts // [])[] | {
+                            type: .Type,
+                            source: (if .Type == "volume" then .Name else .Source end),
+                            destination: .Destination,
+                            mode: ([if .RW then "rw" else "ro" end] + [(.Options // [])[] | select(. == "Z" or . == "z")] | join(","))
+                        }],
+                        networks: [($c.NetworkSettings.Networks // {}) | to_entries[] | {name: .key, ip: (.value.IPAddress // "" | if . == "" then null else . end)}],
+                        secrets: [directives("Secret")[] | split(",") | {
+                            name: .[0],
+                            type: ((map(select(startswith("type="))) | first // "type=mount") | ltrimstr("type=")),
+                            target: ((map(select(startswith("target="))) | first // null) | if . == null then null else ltrimstr("target=") end)
+                        } | .target //= .name],
+                        environment: (if $source != "" then
+                            [directives("Environment")[] | unquote | capture("^(?<name>[^=]+)=(?<value>.*)$") | {name, value: (.value | unquote)}]
+                        else
+                            [($c.Config.Env // [])[] | capture("^(?<name>[^=]+)=(?<value>.*)$") | select(.name | IN("PATH", "HOSTNAME", "HOME", "TERM", "container") | not)]
+                        end)
+                    })
+                }'
+            ;;
+
+        logs)
+            local LINES=200
+
+            while [ $# -gt 0 ]; do
+                case "$1" in
+                    --lines) LINES="${2:-}"; shift ;;
+                    --json) ;;
+                    *) echo "Unknown option: $1" >&2; return 1 ;;
+                esac
+
+                shift
+            done
+
+            valid_lines "$LINES" || return 1
+
+            local ENTRIES
+
+            if [ -n "$UNIT" ]; then
+                ENTRIES="$(journal_entries_json --unit "$UNIT" --lines="$LINES")" || return 1
+            else
+                # Containers outside Quadlet log to Podman, not the journal...
+                ENTRIES="$("${LPOD_PODMAN_BINARY:-podman}" logs --timestamps --tail "$LINES" "$NAME" 2>&1 | jq -Rs --arg unit "$NAME" '
+                    split("\n") | map(select(. != "")) | map(capture("^(?<time>\\S+)\\s(?<message>.*)$") // {time: null, message: .})
+                    | map({time: (.time // "" | sub("\\.[0-9]+"; "")), unit: $unit, priority: 6, message})')" || return 1
+            fi
+
+            jq --argjson contract "$LPOD_CONTRACT" '{contract: $contract, entries: .}' <<< "$ENTRIES"
+            ;;
+
+        start|stop|restart)
+            # Managed containers go through systemd, so the unit and Quadlet
+            # stay in step. Without a unit, Podman acts on the container...
+            if [ -n "$UNIT" ]; then
+                "${SYSTEMCTL_CMD[@]}" --no-block "$ACTION" "$UNIT" || return 1
+            else
+                "${LPOD_PODMAN_BINARY:-podman}" "$ACTION" "$NAME" > /dev/null || return 1
+            fi
+
+            json_ok
+            ;;
+
+        *)
+            echo "Usage: lpod container NAME inspect|logs|start|stop|restart --json" >&2
+
+            return 1
+            ;;
+    esac
+}
+
+# Where "lpod auto-update --dry-run" keeps the images that have an update...
+function auto_update_cache {
+    echo "${XDG_CACHE_HOME:-$HOME/.cache}/lpod/auto-update.json"
+}
+
+# "lpod images --json"...
+function cmd_images_json {
+    require_jq
+
+    local IMAGES CONTAINERS UPDATES="[]"
+    IMAGES="$("${LPOD_PODMAN_BINARY:-podman}" images --all --format json)" || return 1
+    CONTAINERS="$(host_containers_json)" || return 1
+
+    if [ -f "$(auto_update_cache)" ]; then
+        UPDATES="$(cat "$(auto_update_cache)")"
+    fi
+
+    local INSPECT
+    INSPECT="$(container_inspect_all_json)" || return 1
+
+    jq -n \
+        --argjson contract "$LPOD_CONTRACT" \
+        --argjson images "$IMAGES" \
+        --argjson containers "$CONTAINERS" \
+        --argjson inspect "$INSPECT" \
+        --argjson updates "${UPDATES:-[]}" '
+        def iso: if . == null then null else (tonumber | strftime("%Y-%m-%dT%H:%M:%S+00:00")) end;
+        ($inspect | map({name: .Name, image: .Image, auto_update: (.Config.Labels["io.containers.autoupdate"] // null)})) as $uses
+        | {
+            contract: $contract,
+            images: ($images
+                | map(select((.ReadOnly // false) | not))
+                | map(
+                    . as $image
+                    | ((.Names // []) | first // null) as $reference
+                    | [$uses[] | select(. as $use | ($use.image // "") != "" and (($image.Id | startswith($use.image)) or ($use.image | startswith($image.Id))))] as $used
+                    | ([$used[].name] as $names | [$containers[] | select(.name as $n | $names | index($n)) | .application | select(. != null)] | unique) as $applications
+                    | {
+                        id: (.Id[0:12]),
+                        repository: (if $reference == null then null else ($reference | sub(":[^:/]+$"; "")) end),
+                        tag: (if $reference == null then null else ($reference | capture(":(?<tag>[^:/]+)$").tag // "latest") end),
+                        size: (.Size // null),
+                        created_at: (.Created | iso),
+                        used_by: $applications,
+                        containers: ($used | length),
+                        dangling: ($reference == null),
+                        auto_update: (first($used[].auto_update | select(. != null)) // null),
+                        update: (if $reference != null and any($updates[]; .Image == $reference and .Updated == "pending")
+                            then ($reference | capture(":(?<tag>[^:/]+)$").tag // "latest") else null end)
+                    })
+                | sort_by(.dangling, .repository, .tag))
+        }'
+}
+
+# "lpod image pull REF --json" and "lpod image rm ID --json"...
+function cmd_image_json {
+    require_jq
+
+    local ACTION="${1:-}"
+    local TARGET="${2:-}"
+    local PODMAN="${LPOD_PODMAN_BINARY:-podman}"
+
+    case "$ACTION" in
+        pull)
+            if ! [[ "$TARGET" =~ ^[A-Za-z0-9][A-Za-z0-9._/:@-]*$ ]]; then
+                echo "Invalid image reference: ${TARGET}." >&2
+
+                return 1
+            fi
+
+            "$PODMAN" pull --quiet "$TARGET" > /dev/null || return 1
+            ;;
+
+        rm)
+            if ! [[ "$TARGET" =~ ^[a-f0-9]{12,64}$ ]]; then
+                echo "Remove an image by its ID." >&2
+
+                return 1
+            fi
+
+            "$PODMAN" image rm "$TARGET" > /dev/null || return 1
+            ;;
+
+        *)
+            echo "Usage: lpod image pull REF|rm ID --json" >&2
+
+            return 1
+            ;;
+    esac
+
+    json_ok
+}
+
+# Prints the outcome of a prune: the REMOVED names on stdin, and the bytes
+# RECLAIMED (or "null" when unknown)...
+function prune_result_json {
+    local RECLAIMED="$1"
+
+    jq -Rs --argjson contract "$LPOD_CONTRACT" --argjson reclaimed "$RECLAIMED" '{
+        contract: $contract,
+        removed: (split("\n") | map(select(. != "")) | map(if test("^[a-f0-9]{64}$") then .[0:12] else . end)),
+        reclaimed: $reclaimed
+    }'
+}
+
+# "lpod images prune --json": removes every image no container uses...
+function cmd_images_prune_json {
+    require_jq
+
+    local PODMAN="${LPOD_PODMAN_BINARY:-podman}"
+    local RECLAIMED
+    RECLAIMED="$("$PODMAN" images --format json | jq '[.[] | select((.Containers // 0) == 0 and ((.ReadOnly // false) | not)) | .Size // 0] | add // 0')"
+
+    "$PODMAN" image prune --all --force | prune_result_json "${RECLAIMED:-null}"
+}
+
+# "lpod auto-update --dry-run --json": asks the registries which images have
+# an update, and keeps the answer for "lpod images"...
+function cmd_auto_update_json {
+    require_jq
+
+    if [ "${1:-}" != "--dry-run" ]; then
+        echo "Usage: lpod auto-update --dry-run --json" >&2
+
+        return 1
+    fi
+
+    local RESULT
+    RESULT="$("${LPOD_PODMAN_BINARY:-podman}" auto-update --dry-run --format json)" || return 1
+
+    mkdir -p "$(dirname "$(auto_update_cache)")" || return 1
+    jq 'if type == "array" then . else [] end' <<< "${RESULT:-[]}" > "$(auto_update_cache)" || return 1
+
+    json_ok
+}
+
+# "lpod volumes --json"...
+function cmd_volumes_json {
+    require_jq
+
+    local PODMAN="${LPOD_PODMAN_BINARY:-podman}"
+    local VOLUMES UNITS SOURCES CONTAINERS INSPECT
+    VOLUMES="$("$PODMAN" volume inspect --all)" || return 1
+    UNITS="$(quadlet_units_json)" || return 1
+    SOURCES="$(quadlet_sources_json "$UNITS")"
+    CONTAINERS="$(host_containers_json)" || return 1
+    INSPECT="$(container_inspect_all_json)" || return 1
+
+    jq -n \
+        --argjson contract "$LPOD_CONTRACT" \
+        --argjson volumes "${VOLUMES:-[]}" \
+        --argjson units "$UNITS" \
+        --argjson sources "$SOURCES" \
+        --argjson containers "$CONTAINERS" \
+        --argjson inspect "$INSPECT" '
+        def source($name): first($sources[] | select(.name == $name) | .content) // "";
+        def directive($content; $key): $content | split("\n") | map(select(startswith($key + "=")) | ltrimstr($key + "=") | sub("\\s+$"; "")) | last;
+        def app_of($name): first($containers[] | select(.name == $name) | .application) // null;
+        ($units | map(select(.ext == "volume")) | map({name: (directive(source(.Name); "VolumeName") // "systemd-\(.base)"), quadlet: .Name})) as $volume_units
+        | ($units | map(select(.ext == "container")) | map(.Name as $quadlet | source(.Name) | split("\n") | map(select(startswith("Volume=")) | ltrimstr("Volume=") | split(":")[0] | select(test("^[A-Za-z0-9][A-Za-z0-9_.-]*$") and (endswith(".volume") | not)) | {name: ., quadlet: $quadlet})) | add // []) as $inline
+        | ($inspect | map(.Name as $container | (.Mounts // [])[] | {container: $container, type: .Type, name: .Name, source: .Source})) as $mounts
+        | def users(f): [$mounts[] | select(f)] | map(.container) | unique;
+        {
+            contract: $contract,
+            volumes: (
+                ($volumes | map(
+                    . as $volume
+                    | users(.type == "volume" and .name == $volume.Name) as $users
+                    | {
+                        name: .Name,
+                        quadlet: (first($volume_units[] | select(.name == $volume.Name) | .quadlet) // first($inline[] | select(.name == $volume.Name) | .quadlet) // null),
+                        driver: (.Driver // "local"),
+                        mountpoint: (if (.Options.type // "") == "nfs" then (.Options.device // .Mountpoint) else .Mountpoint end),
+                        size: null,
+                        type: (if .Anonymous // false then "anonymous" elif (.Options.type // "") == "nfs" then "nfs" else "named" end),
+                        containers: $users,
+                        applications: ([$users[] | app_of(.) | select(. != null)] | unique)
+                    }))
+                + ([$mounts[] | select(.type == "bind") | .source] | unique | map(
+                    . as $path
+                    | users(.type == "bind" and .source == $path) as $users
+                    | {
+                        name: $path,
+                        quadlet: null,
+                        driver: "local",
+                        mountpoint: $path,
+                        size: null,
+                        type: "bind",
+                        containers: $users,
+                        applications: ([$users[] | app_of(.) | select(. != null)] | unique)
+                    }))
+            )
+        }'
+}
+
+# "lpod volume rm NAME --json"...
+function cmd_volume_json {
+    require_jq
+
+    if [ "${1:-}" != "rm" ]; then
+        echo "Usage: lpod volume rm NAME --json" >&2
+
+        return 1
+    fi
+
+    valid_name "${2:-}" || return 1
+
+    "${LPOD_PODMAN_BINARY:-podman}" volume rm "$2" > /dev/null || return 1
+
+    json_ok
+}
+
+# "lpod volumes prune --json": removes every volume no container uses, with
+# its data...
+function cmd_volumes_prune_json {
+    require_jq
+
+    "${LPOD_PODMAN_BINARY:-podman}" volume prune --force | prune_result_json null
+}
+
+# "lpod networks --json"...
+function cmd_networks_json {
+    require_jq
+
+    local PODMAN="${LPOD_PODMAN_BINARY:-podman}"
+    local NETWORKS UNITS SOURCES CONTAINERS INSPECT
+    NETWORKS="$("$PODMAN" network ls --format json)" || return 1
+    UNITS="$(quadlet_units_json)" || return 1
+    SOURCES="$(quadlet_sources_json "$UNITS")"
+    CONTAINERS="$(host_containers_json)" || return 1
+    INSPECT="$(container_inspect_all_json)" || return 1
+
+    jq -n \
+        --argjson contract "$LPOD_CONTRACT" \
+        --argjson networks "$NETWORKS" \
+        --argjson units "$UNITS" \
+        --argjson sources "$SOURCES" \
+        --argjson containers "$CONTAINERS" \
+        --argjson inspect "$INSPECT" '
+        def source($name): first($sources[] | select(.name == $name) | .content) // "";
+        def directive($content; $key): $content | split("\n") | map(select(startswith($key + "=")) | ltrimstr($key + "=") | sub("\\s+$"; "")) | last;
+        def app_of($name): first($containers[] | select(.name == $name) | .application) // null;
+        ($units | map(select(.ext == "network")) | map({name: (directive(source(.Name); "NetworkName") // "systemd-\(.base)"), quadlet: .Name})) as $network_units
+        | ($units | map(select(.ext == "container" or .ext == "pod")) | map(.app as $app | source(.Name) | split("\n") | map(select(startswith("Network=")) | ltrimstr("Network=") | split(":")[0] | {quadlet: ., app: $app})) | add // []) as $references
+        | ($inspect | map(.Name as $container | (.NetworkSettings.Networks // {}) | keys[] | {container: $container, network: .})) as $attached
+        | {
+            contract: $contract,
+            networks: ($networks | map(
+                . as $network
+                | (first($network_units[] | select(.name == $network.name) | .quadlet) // null) as $quadlet
+                | [$attached[] | select(.network == $network.name) | .container] as $users
+                | {
+                    name: .name,
+                    quadlet: $quadlet,
+                    driver: (.driver // "bridge"),
+                    subnet: ((.subnets // []) | first | .subnet // null),
+                    gateway: ((.subnets // []) | first | .gateway // null),
+                    dns: (.dns_enabled // false),
+                    internal: (.internal // false),
+                    ipv6: (.ipv6_enabled // false),
+                    containers: ($users | unique | length),
+                    applications: ([($users[] | app_of(.)), ($references[] | select(.quadlet == $quadlet or .quadlet == $network.name) | .app)] | map(select(. != null)) | unique),
+                    default: (.name == "podman")
+                }) | sort_by((.default | not), .name))
+        }'
+}
+
+# "lpod network rm NAME --json"...
+function cmd_network_json {
+    require_jq
+
+    if [ "${1:-}" != "rm" ]; then
+        echo "Usage: lpod network rm NAME --json" >&2
+
+        return 1
+    fi
+
+    valid_name "${2:-}" || return 1
+
+    "${LPOD_PODMAN_BINARY:-podman}" network rm "$2" > /dev/null || return 1
+
+    json_ok
+}
+
+# "lpod networks prune --json": removes every network no container uses...
+function cmd_networks_prune_json {
+    require_jq
+
+    "${LPOD_PODMAN_BINARY:-podman}" network prune --force | prune_result_json null
+}
+
+# "lpod journal --json [--lines N] [--since TIME|boot] [--priority N]": the
+# journal of every unit the installed Quadlets generate, plus the auto-update
+# service...
+function cmd_journal_json {
+    require_jq
+
+    local LINES=500
+    local FILTER=()
+
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --lines) LINES="${2:-}"; shift ;;
+            --since)
+                if [ "${2:-}" == "boot" ]; then
+                    FILTER+=(--boot)
+                else
+                    FILTER+=(--since "${2:-}")
+                fi
+                shift
+                ;;
+            --priority)
+                if ! [[ "${2:-}" =~ ^[0-7]$ ]]; then
+                    echo "--priority takes a number from 0 to 7." >&2
+
+                    return 1
+                fi
+                FILTER+=(--priority "$2")
+                shift
+                ;;
+            --json) ;;
+            *) echo "Unknown option: $1" >&2; return 1 ;;
+        esac
+
+        shift
+    done
+
+    valid_lines "$LINES" || return 1
+
+    local UNITS UNIT_ARGS=(--unit podman-auto-update.service)
+    UNITS="$(quadlet_units_json)" || return 1
+
+    local UNIT
+    while IFS= read -r UNIT; do
+        UNIT_ARGS+=(--unit "$UNIT")
+    done < <(jq -r '.[] | .UnitName // empty' <<< "$UNITS")
+
+    local ENTRIES
+    ENTRIES="$(journal_entries_json "${UNIT_ARGS[@]}" --lines="$LINES" "${FILTER[@]}")" || return 1
+
+    jq --argjson contract "$LPOD_CONTRACT" '{contract: $contract, entries: .}' <<< "$ENTRIES"
+}
+
+# Checks that NAME is a plain Quadlet file name, so a file never lands
+# outside the directory it is written to...
+function valid_quadlet_file {
+    if ! [[ "$1" =~ ^[A-Za-z0-9][A-Za-z0-9_.@-]{0,127}\.(container|pod|volume|network|kube|image|build|env|yaml|yml)$ ]]; then
+        echo "Invalid Quadlet file name: ${1}." >&2
+
+        return 1
+    fi
+}
+
+# Writes the files of a '{"files": [{name, content}]}' document on stdin into
+# DIRECTORY...
+function write_stdin_files {
+    local DIRECTORY="$1"
+    local DOCUMENT NAMES NAME
+
+    DOCUMENT="$(cat)"
+    mapfile -t NAMES < <(jq -r '.files[]?.name' <<< "$DOCUMENT")
+
+    if [ ${#NAMES[@]} -eq 0 ]; then
+        echo 'Pass {"files": [{"name": ..., "content": ...}]} on stdin.' >&2
+
+        return 1
+    fi
+
+    for NAME in "${NAMES[@]}"; do
+        valid_quadlet_file "$NAME" || return 1
+        jq -j --arg name "$NAME" 'first(.files[] | select(.name == $name)) | .content' <<< "$DOCUMENT" > "${DIRECTORY}/${NAME}" || return 1
+    done
+}
+
+# Finds the Quadlet generator, which "lpod quadlet check" runs with -dryrun...
+function quadlet_generator {
+    local CANDIDATE
+
+    for CANDIDATE in "${LPOD_QUADLET_BINARY:-}" /usr/libexec/podman/quadlet /usr/lib/podman/quadlet /usr/local/libexec/podman/quadlet; do
+        if [ -n "$CANDIDATE" ] && [ -x "$CANDIDATE" ]; then
+            echo "$CANDIDATE"
+
+            return
+        fi
+    done
+
+    echo "The Quadlet generator was not found. Set LPOD_QUADLET_BINARY to its path." >&2
+
+    return 1
+}
+
+# "lpod quadlet check|install|fetch ... --json"...
+function cmd_quadlet_json {
+    require_jq
+
+    local ACTION="${1:-}"
+    shift || true
+
+    case "$ACTION" in
+        check) cmd_quadlet_check "$@" ;;
+        install) cmd_quadlet_install "$@" ;;
+        fetch) cmd_quadlet_fetch "$@" ;;
+        *)
+            echo "Usage: lpod quadlet check|install|fetch ... --json" >&2
+
+            return 1
+            ;;
+    esac
+}
+
+# "lpod quadlet check --stdin --json": runs the files through the Quadlet
+# generator with -dryrun, next to the installed Quadlets they may reference...
+function cmd_quadlet_check {
+    local GENERATOR WORK
+    GENERATOR="$(quadlet_generator)" || return 1
+    WORK="$(mktemp -d)" || return 1
+    # shellcheck disable=SC2064
+    trap "rm -rf '${WORK}'" RETURN
+
+    write_stdin_files "$WORK" || return 1
+
+    local SCOPE_ARGS=()
+    if [ "$(id -u)" -ne 0 ]; then
+        SCOPE_ARGS=(-user)
+    fi
+
+    local OUTPUT ERRORS
+    OUTPUT="$(QUADLET_UNIT_DIRS="${WORK}:$(quadlet_unit_path)" "$GENERATOR" -dryrun "${SCOPE_ARGS[@]}" 2> "${WORK}/.errors")"
+    ERRORS="$(cat "${WORK}/.errors")"
+
+    local NAMES
+    NAMES="$(find "$WORK" -maxdepth 1 -type f ! -name '.errors' -printf '%f\n' | jq -R . | jq -s .)"
+
+    jq -n \
+        --argjson contract "$LPOD_CONTRACT" \
+        --argjson names "$NAMES" \
+        --arg output "$OUTPUT" \
+        --arg errors "$ERRORS" '
+        ($names | map(sub("\\.[^.]+$"; ""))) as $bases
+        | ($errors | split("\n") | map(select(. != "")) | map(sub("^quadlet-generator\\[[0-9]+\\]: "; "")) | map(select(. as $line | any($names[]; . as $name | $line | contains($name))))) as $problems
+        | ($output | split("\n") | map(capture("^---(?<unit>.+)---$").unit // empty) | map(select(. as $unit | any($bases[]; . as $base | $unit | startswith($base))))) as $units
+        | {contract: $contract, valid: ($problems | length == 0), errors: $problems, units: $units}'
+}
+
+# "lpod quadlet install APP [--replace] [--start] --stdin --json": installs the
+# files as the application APP with "podman quadlet install", then starts its
+# units...
+function cmd_quadlet_install {
+    local APPLICATION="${1:-}"
+    shift || true
+
+    if ! [[ "$APPLICATION" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$ ]] || [[ "$APPLICATION" =~ \.(container|pod|volume|network|kube|image|build)$ ]]; then
+        echo "Invalid application name: ${APPLICATION}." >&2
+
+        return 1
+    fi
+
+    local REPLACE_FILES=false START=false STDIN=false
+
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --replace) REPLACE_FILES=true ;;
+            --start) START=true ;;
+            --stdin) STDIN=true ;;
+            --json) ;;
+            *) echo "Unknown option: $1" >&2; return 1 ;;
+        esac
+
+        shift
+    done
+
+    if [ "$STDIN" != true ]; then
+        echo "Pass the files on stdin, with --stdin." >&2
+
+        return 1
+    fi
+
+    local WORK
+    WORK="$(mktemp -d)" || return 1
+    # shellcheck disable=SC2064
+    trap "rm -rf '${WORK}'" RETURN
+
+    mkdir "${WORK}/${APPLICATION}" || return 1
+    write_stdin_files "${WORK}/${APPLICATION}" || return 1
+
+    "${LPOD_PODMAN_BINARY:-podman}" quadlet install --application="$APPLICATION" --replace="$REPLACE_FILES" "${WORK}/${APPLICATION}" > /dev/null || return 1
+
+    if [ "$START" == true ]; then
+        local SERVICES
+        mapfile -t SERVICES < <(quadlet_units_json | jq -r --arg app "$APPLICATION" '.[] | select(.app == $app and (.ext | IN("container", "pod", "kube", "volume", "network"))) | .UnitName // empty')
+
+        if [ ${#SERVICES[@]} -gt 0 ]; then
+            "${SYSTEMCTL_CMD[@]}" --no-block start "${SERVICES[@]}" || return 1
+        fi
+    fi
+
+    json_ok
+}
+
+# "lpod quadlet fetch URL --ref REF [--path DIR] --json": prints the files in
+# a directory of a Git repository, without installing them...
+function cmd_quadlet_fetch {
+    local REPOSITORY="${1:-}"
+    shift || true
+
+    local REFERENCE="" DIRECTORY=""
+
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --ref) REFERENCE="${2:-}"; shift ;;
+            --path) DIRECTORY="${2:-}"; shift ;;
+            --json) ;;
+            *) echo "Unknown option: $1" >&2; return 1 ;;
+        esac
+
+        shift
+    done
+
+    if ! [[ "$REPOSITORY" =~ ^(https://|ssh://|git@)[A-Za-z0-9][A-Za-z0-9._~:/@%+-]*$ ]]; then
+        echo "Use an https://, ssh:// or git@ repository URL." >&2
+
+        return 1
+    fi
+
+    if ! [[ "$REFERENCE" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]*$ ]] || [[ "$REFERENCE" == *..* ]]; then
+        echo "Invalid branch or tag: ${REFERENCE}." >&2
+
+        return 1
+    fi
+
+    DIRECTORY="${DIRECTORY%/}"
+
+    if [ -n "$DIRECTORY" ] && { ! [[ "$DIRECTORY" =~ ^[A-Za-z0-9._-][A-Za-z0-9._/-]*$ ]] || [[ "$DIRECTORY" == *..* ]]; }; then
+        echo "Invalid directory: ${DIRECTORY}." >&2
+
+        return 1
+    fi
+
+    if ! command -v git > /dev/null 2>&1; then
+        echo "lpod needs git to fetch a repository." >&2
+
+        return 1
+    fi
+
+    local WORK
+    WORK="$(mktemp -d)" || return 1
+    # shellcheck disable=SC2064
+    trap "rm -rf '${WORK}'" RETURN
+
+    GIT_TERMINAL_PROMPT=0 git -c protocol.ext.allow=never -c protocol.file.allow=never clone --quiet --depth 1 --branch "$REFERENCE" -- "$REPOSITORY" "${WORK}/repository" || return 1
+
+    local SOURCE="${WORK}/repository${DIRECTORY:+/$DIRECTORY}"
+
+    if [ ! -d "$SOURCE" ]; then
+        echo "${DIRECTORY} is not a directory in the repository." >&2
+
+        return 1
+    fi
+
+    local COMMIT
+    COMMIT="$(git -C "${WORK}/repository" rev-parse --short HEAD)"
+
+    # shellcheck disable=SC2094
+    find "$SOURCE" -maxdepth 1 -type f -size -256k ! -name '.*' | sort | head -n 50 | while IFS= read -r FILE; do
+        jq -Rs --arg name "$(basename "$FILE")" '{name: $name, content: .}' < "$FILE"
+    done | jq -s --argjson contract "$LPOD_CONTRACT" --arg commit "$COMMIT" '{contract: $contract, commit: $commit, files: .}'
+}
+
+# "lpod APP remove [--volumes] [--images] [--secrets] --json": stops the
+# application and removes its Quadlets, plus the data it owns when asked.
+# Images and secrets that other applications use stay...
+function cmd_app_remove_json {
+    local APPLICATION="$1"
+    shift
+
+    local VOLUMES=false IMAGES=false SECRETS=false ARG
+
+    for ARG in "$@"; do
+        case "$ARG" in
+            --volumes) VOLUMES=true ;;
+            --images) IMAGES=true ;;
+            --secrets) SECRETS=true ;;
+            --json) ;;
+            *) echo "Unknown option: $ARG" >&2; return 1 ;;
+        esac
+    done
+
+    local PODMAN="${LPOD_PODMAN_BINARY:-podman}"
+    local UNITS SOURCES MINE
+    UNITS="$(quadlet_units_json)" || return 1
+    SOURCES="$(quadlet_sources_json "$UNITS")"
+    MINE="$(jq --arg app "$APPLICATION" 'map(select(.app == $app))' <<< "$UNITS")"
+
+    if [ "$(jq 'length' <<< "$MINE")" -eq 0 ]; then
+        echo "No application named ${APPLICATION} is installed." >&2
+
+        return 1
+    fi
+
+    local OWNED
+    OWNED="$(jq -n --arg app "$APPLICATION" --argjson units "$UNITS" --argjson sources "$SOURCES" '
+        def source($name): first($sources[] | select(.name == $name) | .content) // "";
+        def directives($content; $key): $content | split("\n") | map(select(startswith($key + "=")) | ltrimstr($key + "=") | sub("\\s+$"; ""));
+        def directive($content; $key): directives($content; $key) | last;
+        def uses($unit; $key): directives(source($unit.Name); $key);
+        ($units | map(select(.app == $app))) as $mine
+        | ($units | map(select(.app != $app))) as $others
+        | {
+            volumes: ([$mine[] | select(.ext == "volume") | directive(source(.Name); "VolumeName") // "systemd-\(.base)"]
+                + [$mine[] | select(.ext == "container") | uses(.; "Volume")[] | split(":")[0] | select(test("^[A-Za-z0-9][A-Za-z0-9_.-]*$") and (endswith(".volume") | not))]) | unique,
+            images: ([$mine[] | select(.ext == "container") | uses(.; "Image")[] | select(endswith(".build") or endswith(".image") | not)] | unique
+                | map(select(. as $image | [$others[] | select(.ext == "container") | uses(.; "Image")[]] | index($image) | not))),
+            secrets: ([$mine[] | select(.ext == "container") | uses(.; "Secret")[] | split(",")[0]] | unique
+                | map(select(. as $secret | [$others[] | select(.ext == "container") | uses(.; "Secret")[] | split(",")[0]] | index($secret) | not)))
+        }')"
+
+    # An application installed with --application is removed as a whole;
+    # a lone Quadlet by its file name...
+    if jq -e --arg app "$APPLICATION" 'any(.[]; (.App // "") == $app)' <<< "$MINE" > /dev/null; then
+        "$PODMAN" quadlet rm --force --recursive "$APPLICATION" > /dev/null || return 1
+    else
+        local NAMES
+        mapfile -t NAMES < <(jq -r '.[].Name' <<< "$MINE")
+        "$PODMAN" quadlet rm --force "${NAMES[@]}" > /dev/null || return 1
+    fi
+
+    local ITEM
+
+    if [ "$VOLUMES" == true ]; then
+        while IFS= read -r ITEM; do
+            "$PODMAN" volume rm --force "$ITEM" > /dev/null 2>&1 || true
+        done < <(jq -r '.volumes[]' <<< "$OWNED")
+    fi
+
+    if [ "$IMAGES" == true ]; then
+        while IFS= read -r ITEM; do
+            "$PODMAN" image rm "$ITEM" > /dev/null 2>&1 || true
+        done < <(jq -r '.images[]' <<< "$OWNED")
+    fi
+
+    if [ "$SECRETS" == true ]; then
+        while IFS= read -r ITEM; do
+            "$PODMAN" secret rm "$ITEM" > /dev/null 2>&1 || true
+        done < <(jq -r '.secrets[]' <<< "$OWNED")
+    fi
+
+    json_ok
 }
 
 # Where "podman:generate" wrote rendered ".quadlets" files, matching the
@@ -1598,12 +2514,39 @@ case "$1" in
         ;;
 esac
 
+# The host resources of the JSON contract. They only answer with "--json", so
+# the same words stay free as service names for the commands below...
+if json_requested "$@"; then
+    case "$1" in
+        containers) shift; cmd_containers_json "$@"; exit $? ;;
+        container) shift; cmd_container_json "$@"; exit $? ;;
+        images)
+            if [ "${2:-}" == "prune" ]; then cmd_images_prune_json; else cmd_images_json; fi
+            exit $?
+            ;;
+        image) shift; cmd_image_json "$@"; exit $? ;;
+        auto-update) shift; cmd_auto_update_json "$@"; exit $? ;;
+        volumes)
+            if [ "${2:-}" == "prune" ]; then cmd_volumes_prune_json; else cmd_volumes_json; fi
+            exit $?
+            ;;
+        volume) shift; cmd_volume_json "$@"; exit $? ;;
+        networks)
+            if [ "${2:-}" == "prune" ]; then cmd_networks_prune_json; else cmd_networks_json; fi
+            exit $?
+            ;;
+        network) shift; cmd_network_json "$@"; exit $? ;;
+        journal) shift; cmd_journal_json "$@"; exit $? ;;
+        quadlet) shift; cmd_quadlet_json "$@"; exit $? ;;
+    esac
+fi
+
 # An application's "--json" commands take an application name, and run
 # before the ".env" of the current directory is sourced, since tools such as
 # Pods run them over SSH from the home directory...
 if [ $# -ge 2 ] && json_requested "$@"; then
     case "$2" in
-        status|files|logs|up|down|restart|redeploy|secret)
+        status|files|logs|up|down|restart|redeploy|remove|secret)
             cmd_app_json "$@"
             exit $?
             ;;
