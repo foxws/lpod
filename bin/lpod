@@ -1311,7 +1311,7 @@ function cmd_app_secret_add {
 }
 
 # The "--json" commands of an application: "lpod APP status|files|logs|up|
-# down|restart|secret add ... --json"...
+# down|restart|redeploy|secret add ... --json"...
 function cmd_app_json {
     require_jq
 
@@ -1405,6 +1405,48 @@ function cmd_app_json {
                 # one, since siblings don't always stop with it...
                 down) local SERVICES; mapfile -t SERVICES < <(jq -r '.services[]' <<< "$APPLICATION"); "${SYSTEMCTL_CMD[@]}" "${NO_BLOCK[@]}" stop "${SERVICES[@]}" || return 1 ;;
             esac
+
+            json_ok
+            ;;
+
+        redeploy)
+            local DETACH=false
+            local ARG
+
+            for ARG in "$@"; do
+                if [ "$ARG" == "--no-block" ]; then
+                    DETACH=true
+                fi
+            done
+
+            local APP_NAME
+            APP_NAME="$(jq -r '.name' <<< "$APPLICATION")"
+
+            # Pulling can take minutes, longer than a web request waits, so
+            # with "--no-block" a transient unit does the work and logs to the
+            # journal as lpod-redeploy-APP...
+            if [ "$DETACH" == true ]; then
+                local SYSTEMD_RUN=(systemd-run --quiet --collect --no-block)
+
+                if [ "$SYSTEMD_SCOPE" == "user" ]; then
+                    SYSTEMD_RUN+=(--user)
+                fi
+
+                "${SYSTEMD_RUN[@]}" --unit "lpod-redeploy-$(systemd-escape -- "$APP_NAME")" \
+                    "$(realpath "$0")" "$APP_NAME" redeploy --json > /dev/null || return 1
+
+                json_ok
+
+                return
+            fi
+
+            local IMAGE
+
+            while IFS= read -r IMAGE; do
+                "${LPOD_PODMAN_BINARY:-podman}" pull --quiet "$IMAGE" > /dev/null || return 1
+            done < <(jq -r '[.detail.items[].image | select(. != null)] | unique[]' <<< "$APPLICATION")
+
+            "${SYSTEMCTL_CMD[@]}" restart "$(jq -r '.unit' <<< "$APPLICATION")" || return 1
 
             json_ok
             ;;
@@ -1559,7 +1601,7 @@ esac
 # Pods run them over SSH from the home directory...
 if [ $# -ge 2 ] && json_requested "$@"; then
     case "$2" in
-        status|files|logs|up|down|restart|secret)
+        status|files|logs|up|down|restart|redeploy|secret)
             cmd_app_json "$@"
             exit $?
             ;;

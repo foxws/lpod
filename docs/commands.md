@@ -144,6 +144,7 @@ Tools such as Pods manage a host by running these commands over SSH. With `--jso
 | `lpod APP files --json` | `files`: the application's Quadlets and their drop-ins, with their contents |
 | `lpod APP logs --json [--lines N] [--since TIME]` | `entries`: the journal of the application's units, as `time`, `unit`, `priority` and `message` |
 | `lpod APP up\|down\|restart --json [--no-block]` | `{"ok": true}`. `up` and `restart` act on the main unit, `down` stops every unit of the application. With `--no-block`, it returns without waiting for systemd |
+| `lpod APP redeploy --json [--no-block]` | `{"ok": true}`. Pulls every image the application's containers use, then restarts its main unit. With `--no-block`, a transient unit, `lpod-redeploy-APP`, does the work and logs to the journal |
 | `lpod APP secret add NAME --type env\|mount --target TARGET --json` | `{"ok": true}`. Writes the drop-in `lpod-secret-NAME.conf` for the application's main container, next to its Quadlet |
 
 An application is what `podman quadlet install --application` (or `lpod install`) grouped the Quadlets under. `APP` is its name, or the name of one of its Quadlets without the extension. Its main unit is its pod, or else its kube, or else the container with the shortest name. A Quadlet installed without an application is an application of its own.
