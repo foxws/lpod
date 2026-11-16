@@ -1,0 +1,6 @@
+{
+    "contract": 1,
+    "valid": false,
+    "errors": ["uptime-kuma.container: unsupported key 'Imagee' in group 'Container'"],
+    "units": []
+}

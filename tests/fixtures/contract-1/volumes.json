@@ -1,0 +1,55 @@
+{
+    "contract": 1,
+    "volumes": [
+        {
+            "name": "immich-library",
+            "quadlet": "immich-library.volume",
+            "driver": "local",
+            "mountpoint": "/home/blue/.local/share/containers/storage/volumes/immich-library/_data",
+            "size": null,
+            "type": "named",
+            "containers": ["immich-server"],
+            "applications": ["immich"]
+        },
+        {
+            "name": "/var/mnt/photos",
+            "quadlet": null,
+            "driver": "local",
+            "mountpoint": "/var/mnt/photos",
+            "size": null,
+            "type": "bind",
+            "containers": ["immich-server"],
+            "applications": ["immich"]
+        },
+        {
+            "name": "vaultwarden-data",
+            "quadlet": "vaultwarden.container",
+            "driver": "local",
+            "mountpoint": "/home/blue/.local/share/containers/storage/volumes/vaultwarden-data/_data",
+            "size": null,
+            "type": "named",
+            "containers": ["vaultwarden"],
+            "applications": ["vaultwarden"]
+        },
+        {
+            "name": "jellyfin-media",
+            "quadlet": "jellyfin-media.volume",
+            "driver": "local",
+            "mountpoint": "nas.home.arpa:/export/media",
+            "size": null,
+            "type": "nfs",
+            "containers": ["jellyfin"],
+            "applications": ["jellyfin"]
+        },
+        {
+            "name": "4f2a91c0e7b35d6a8c1e2f3b4a5d6c7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b3c",
+            "quadlet": null,
+            "driver": "local",
+            "mountpoint": "/home/blue/.local/share/containers/storage/volumes/4f2a91c0e7b3/_data",
+            "size": null,
+            "type": "anonymous",
+            "containers": [],
+            "applications": []
+        }
+    ]
+}

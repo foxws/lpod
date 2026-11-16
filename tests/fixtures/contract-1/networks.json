@@ -1,0 +1,70 @@
+{
+    "contract": 1,
+    "networks": [
+        {
+            "name": "podman",
+            "quadlet": null,
+            "driver": "bridge",
+            "subnet": "10.88.0.0/16",
+            "gateway": "10.88.0.1",
+            "dns": false,
+            "internal": false,
+            "ipv6": false,
+            "containers": 1,
+            "applications": [],
+            "default": true
+        },
+        {
+            "name": "immich",
+            "quadlet": "immich.network",
+            "driver": "bridge",
+            "subnet": "10.89.1.0/24",
+            "gateway": "10.89.1.1",
+            "dns": true,
+            "internal": false,
+            "ipv6": false,
+            "containers": 2,
+            "applications": ["immich"],
+            "default": false
+        },
+        {
+            "name": "proxy",
+            "quadlet": "proxy.network",
+            "driver": "bridge",
+            "subnet": "10.89.3.0/24",
+            "gateway": "10.89.3.1",
+            "dns": true,
+            "internal": false,
+            "ipv6": false,
+            "containers": 1,
+            "applications": ["vaultwarden", "jellyfin"],
+            "default": false
+        },
+        {
+            "name": "iot",
+            "quadlet": "iot.network",
+            "driver": "macvlan",
+            "subnet": "192.168.20.0/24",
+            "gateway": "192.168.20.1",
+            "dns": false,
+            "internal": false,
+            "ipv6": false,
+            "containers": 0,
+            "applications": ["home-assistant"],
+            "default": false
+        },
+        {
+            "name": "host",
+            "quadlet": null,
+            "driver": "host",
+            "subnet": null,
+            "gateway": null,
+            "dns": false,
+            "internal": false,
+            "ipv6": false,
+            "containers": 0,
+            "applications": [],
+            "default": false
+        }
+    ]
+}

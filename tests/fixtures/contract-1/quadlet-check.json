@@ -1,0 +1,6 @@
+{
+    "contract": 1,
+    "valid": true,
+    "errors": [],
+    "units": ["uptime-kuma.service"]
+}

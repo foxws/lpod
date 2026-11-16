@@ -1,0 +1,41 @@
+{
+    "contract": 1,
+    "entries": [
+        {
+            "time": "2026-11-15T12:04:11+00:00",
+            "unit": "immich-pod.service",
+            "priority": 6,
+            "message": "Starting immich-pod.service..."
+        },
+        {
+            "time": "2026-11-15T12:04:11+00:00",
+            "unit": "immich-server.service",
+            "priority": 6,
+            "message": "Immich Server is listening on :2283"
+        },
+        {
+            "time": "2026-11-15T12:04:19+00:00",
+            "unit": "home-assistant.service",
+            "priority": 3,
+            "message": "Error: no secret with name or id \"ha-mqtt-password\": no such secret"
+        },
+        {
+            "time": "2026-11-15T12:04:19+00:00",
+            "unit": "home-assistant.service",
+            "priority": 3,
+            "message": "home-assistant.service: Failed with result 'exit-code'."
+        },
+        {
+            "time": "2026-11-15T12:10:03+00:00",
+            "unit": "podman-auto-update.service",
+            "priority": 4,
+            "message": "forgejo: codeberg.org/forgejo/forgejo:13 -> 13.1 (pending)"
+        },
+        {
+            "time": "2026-11-15T12:18:00+00:00",
+            "unit": "vaultwarden.service",
+            "priority": 6,
+            "message": "[INFO] Login succeeded for user from 192.168.1.24"
+        }
+    ]
+}

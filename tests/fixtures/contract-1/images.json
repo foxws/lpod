@@ -1,0 +1,77 @@
+{
+    "contract": 1,
+    "images": [
+        {
+            "id": "a3f1c92e5b7d",
+            "repository": "ghcr.io/immich-app/immich-server",
+            "tag": "v2.3.1",
+            "size": 1299227607,
+            "created_at": "2026-11-06T09:00:00+00:00",
+            "used_by": ["immich"],
+            "containers": 1,
+            "dangling": false,
+            "auto_update": "registry",
+            "update": null
+        },
+        {
+            "id": "7be0d4a1c9e3",
+            "repository": "ghcr.io/immich-app/immich-machine-learning",
+            "tag": "v2.3.1",
+            "size": 1589137899,
+            "created_at": "2026-11-06T09:00:00+00:00",
+            "used_by": ["immich"],
+            "containers": 1,
+            "dangling": false,
+            "auto_update": "registry",
+            "update": null
+        },
+        {
+            "id": "e81a6b3d2f05",
+            "repository": "docker.io/vaultwarden/server",
+            "tag": "1.34",
+            "size": 274726912,
+            "created_at": "2026-11-01T09:00:00+00:00",
+            "used_by": ["vaultwarden"],
+            "containers": 1,
+            "dangling": false,
+            "auto_update": "registry",
+            "update": null
+        },
+        {
+            "id": "3b8e7a20d1c6",
+            "repository": "codeberg.org/forgejo/forgejo",
+            "tag": "13",
+            "size": 205520896,
+            "created_at": "2026-10-15T09:00:00+00:00",
+            "used_by": ["forgejo"],
+            "containers": 1,
+            "dangling": false,
+            "auto_update": "registry",
+            "update": "13.1"
+        },
+        {
+            "id": "f4d09c1b8a27",
+            "repository": "docker.io/library/alpine",
+            "tag": "3.21",
+            "size": 8388608,
+            "created_at": "2026-09-01T09:00:00+00:00",
+            "used_by": [],
+            "containers": 0,
+            "dangling": false,
+            "auto_update": null,
+            "update": null
+        },
+        {
+            "id": "0e9f3d61a4b8",
+            "repository": null,
+            "tag": null,
+            "size": 1503238553,
+            "created_at": "2026-09-15T09:00:00+00:00",
+            "used_by": [],
+            "containers": 0,
+            "dangling": true,
+            "auto_update": null,
+            "update": null
+        }
+    ]
+}
