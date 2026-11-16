@@ -1015,12 +1015,12 @@ function applications_json {
     STATS="$(container_stats_json)"
 
     APPLICATIONS="$(jq -n \
-        --argjson units "$UNITS" \
-        --argjson sources "$SOURCES" \
-        --argjson states "$STATES" \
-        --argjson ps "$CONTAINERS" \
-        --argjson stats "${STATS:-[]}" \
-        "${LPOD_APPLICATIONS_JQ} \$units | group_by(.app) | map(application)")" || return 1
+        --slurpfile units <(printf '%s' "$UNITS") \
+        --slurpfile sources <(printf '%s' "$SOURCES") \
+        --slurpfile states <(printf '%s' "$STATES") \
+        --slurpfile ps <(printf '%s' "$CONTAINERS") \
+        --slurpfile stats <(printf '%s' "${STATS:-[]}") \
+        "\$units[0] as \$units | \$sources[0] as \$sources | \$states[0] as \$states | \$ps[0] as \$ps | \$stats[0] as \$stats | ${LPOD_APPLICATIONS_JQ} \$units | group_by(.app) | map(application)")" || return 1
 
     local UNIT ERRORS="{}"
 
@@ -1118,9 +1118,9 @@ function cmd_host {
         --argjson memory "$(awk '/^MemTotal:/ { total = $2 } /^MemAvailable:/ { available = $2 } END { printf "[%d,%d]", (total - available) * 1024, total * 1024 }' /proc/meminfo)" \
         --arg path "$GRAPH_ROOT" \
         --argjson disk "[$(echo "${DISK:-0 0}" | tr ' ' ',')]" \
-        --argjson containers "[$(echo "$CONTAINERS" | tr ' ' ',')]" \
+        --slurpfile containers <(printf '%s' "[$(echo "$CONTAINERS" | tr ' ' ',')]") \
         --arg timer "$TIMER" \
-        '($timer | split("\n") | map(select(contains("=")) | capture("^(?<key>[^=]+)=(?<value>.*)$")) | from_entries) as $timer
+        '$containers[0] as $containers | ($timer | split("\n") | map(select(contains("=")) | capture("^(?<key>[^=]+)=(?<value>.*)$")) | from_entries) as $timer
         | {
             contract: $contract,
             cpu: {cores: $cores, usage: $usage},
@@ -1165,10 +1165,10 @@ function cmd_secret_list {
     local RESULT
     RESULT="$(jq -n \
         --argjson contract "$LPOD_CONTRACT" \
-        --argjson units "$UNITS" \
-        --argjson sources "$SOURCES" \
-        --argjson secrets "$SECRETS" \
-        '($units | map(select(.ext == "container")) | map(.Name as $name | {
+        --slurpfile units <(printf '%s' "$UNITS") \
+        --slurpfile sources <(printf '%s' "$SOURCES") \
+        --slurpfile secrets <(printf '%s' "$SECRETS") \
+        '$units[0] as $units | $sources[0] as $sources | $secrets[0] as $secrets | ($units | map(select(.ext == "container")) | map(.Name as $name | {
             app,
             secrets: [first($sources[] | select(.name == $name) | .content) // "" | split("\n")[] | select(startswith("Secret=")) | ltrimstr("Secret=") | split(",")[0]]
         })) as $uses
@@ -1563,9 +1563,10 @@ function host_containers_json {
     STATS="$(container_stats_json)"
 
     jq -n \
-        --argjson units "$UNITS" \
-        --argjson ps "$PS" \
-        --argjson stats "${STATS:-[]}" '
+        --slurpfile units <(printf '%s' "$UNITS") \
+        --slurpfile ps <(printf '%s' "$PS") \
+        --slurpfile stats <(printf '%s' "${STATS:-[]}") '
+        $units[0] as $units | $ps[0] as $ps | $stats[0] as $stats |
         def iso: if . == null or . == 0 then null else (tonumber | strftime("%Y-%m-%dT%H:%M:%S+00:00")) end;
         $ps
         | map(select((.IsInfra // false) | not))
@@ -1644,10 +1645,11 @@ function cmd_container_json {
 
             jq -n \
                 --argjson contract "$LPOD_CONTRACT" \
-                --argjson summary "$SUMMARY" \
-                --argjson inspect "$INSPECT" \
-                --arg source "$SOURCE" \
+                --slurpfile summary <(printf '%s' "$SUMMARY") \
+                --slurpfile inspect <(printf '%s' "$INSPECT") \
+                --rawfile source <(printf '%s' "$SOURCE") \
                 --arg restarts "${RESTARTS:-}" '
+                $summary[0] as $summary | $inspect[0] as $inspect |
                 def directives($key): $source | split("\n") | map(select(startswith($key + "=")) | ltrimstr($key + "=") | sub("\\s+$"; ""));
                 def time: if . == null or . == "" or (startswith("0001-")) then null else sub("\\.[0-9]+"; "") end;
                 def unquote: if (startswith("\"") and endswith("\"")) then .[1:-1] else . end;
@@ -1760,10 +1762,11 @@ function cmd_images_json {
 
     jq -n \
         --argjson contract "$LPOD_CONTRACT" \
-        --argjson images "$IMAGES" \
-        --argjson containers "$CONTAINERS" \
-        --argjson inspect "$INSPECT" \
-        --argjson updates "${UPDATES:-[]}" '
+        --slurpfile images <(printf '%s' "$IMAGES") \
+        --slurpfile containers <(printf '%s' "$CONTAINERS") \
+        --slurpfile inspect <(printf '%s' "$INSPECT") \
+        --slurpfile updates <(printf '%s' "${UPDATES:-[]}") '
+        $images[0] as $images | $containers[0] as $containers | $inspect[0] as $inspect | $updates[0] as $updates |
         def iso: if . == null then null else (tonumber | strftime("%Y-%m-%dT%H:%M:%S+00:00")) end;
         ($inspect | map({name: .Name, image: .Image, auto_update: (.Config.Labels["io.containers.autoupdate"] // null)})) as $uses
         | {
@@ -1888,11 +1891,12 @@ function cmd_volumes_json {
 
     jq -n \
         --argjson contract "$LPOD_CONTRACT" \
-        --argjson volumes "${VOLUMES:-[]}" \
-        --argjson units "$UNITS" \
-        --argjson sources "$SOURCES" \
-        --argjson containers "$CONTAINERS" \
-        --argjson inspect "$INSPECT" '
+        --slurpfile volumes <(printf '%s' "${VOLUMES:-[]}") \
+        --slurpfile units <(printf '%s' "$UNITS") \
+        --slurpfile sources <(printf '%s' "$SOURCES") \
+        --slurpfile containers <(printf '%s' "$CONTAINERS") \
+        --slurpfile inspect <(printf '%s' "$INSPECT") '
+        $volumes[0] as $volumes | $units[0] as $units | $sources[0] as $sources | $containers[0] as $containers | $inspect[0] as $inspect |
         def source($name): first($sources[] | select(.name == $name) | .content) // "";
         def directive($content; $key): $content | split("\n") | map(select(startswith($key + "=")) | ltrimstr($key + "=") | sub("\\s+$"; "")) | last;
         def app_of($name): first($containers[] | select(.name == $name) | .application) // null;
@@ -1972,11 +1976,12 @@ function cmd_networks_json {
 
     jq -n \
         --argjson contract "$LPOD_CONTRACT" \
-        --argjson networks "$NETWORKS" \
-        --argjson units "$UNITS" \
-        --argjson sources "$SOURCES" \
-        --argjson containers "$CONTAINERS" \
-        --argjson inspect "$INSPECT" '
+        --slurpfile networks <(printf '%s' "$NETWORKS") \
+        --slurpfile units <(printf '%s' "$UNITS") \
+        --slurpfile sources <(printf '%s' "$SOURCES") \
+        --slurpfile containers <(printf '%s' "$CONTAINERS") \
+        --slurpfile inspect <(printf '%s' "$INSPECT") '
+        $networks[0] as $networks | $units[0] as $units | $sources[0] as $sources | $containers[0] as $containers | $inspect[0] as $inspect |
         def source($name): first($sources[] | select(.name == $name) | .content) // "";
         def directive($content; $key): $content | split("\n") | map(select(startswith($key + "=")) | ltrimstr($key + "=") | sub("\\s+$"; "")) | last;
         def app_of($name): first($containers[] | select(.name == $name) | .application) // null;
@@ -2173,9 +2178,10 @@ function cmd_quadlet_check {
 
     jq -n \
         --argjson contract "$LPOD_CONTRACT" \
-        --argjson names "$NAMES" \
-        --arg output "$OUTPUT" \
-        --arg errors "$ERRORS" '
+        --slurpfile names <(printf '%s' "$NAMES") \
+        --rawfile output <(printf '%s' "$OUTPUT") \
+        --rawfile errors <(printf '%s' "$ERRORS") '
+        $names[0] as $names |
         ($names | map(sub("\\.[^.]+$"; ""))) as $bases
         | ($errors | split("\n") | map(select(. != "")) | map(sub("^quadlet-generator\\[[0-9]+\\]: "; "")) | map(select(. as $line | any($names[]; . as $name | $line | contains($name))))) as $problems
         | ($output | split("\n") | map(capture("^---(?<unit>.+)---$").unit // empty) | map(select(. as $unit | any($bases[]; . as $base | $unit | startswith($base))))) as $units
@@ -2338,7 +2344,8 @@ function cmd_app_remove_json {
     fi
 
     local OWNED
-    OWNED="$(jq -n --arg app "$APPLICATION" --argjson units "$UNITS" --argjson sources "$SOURCES" '
+    OWNED="$(jq -n --arg app "$APPLICATION" --slurpfile units <(printf '%s' "$UNITS") --slurpfile sources <(printf '%s' "$SOURCES") '
+        $units[0] as $units | $sources[0] as $sources |
         def source($name): first($sources[] | select(.name == $name) | .content) // "";
         def directives($content; $key): $content | split("\n") | map(select(startswith($key + "=")) | ltrimstr($key + "=") | sub("\\s+$"; ""));
         def directive($content; $key): directives($content; $key) | last;

@@ -47,7 +47,7 @@
             "containers": 1,
             "dangling": false,
             "auto_update": "registry",
-            "update": "13.1"
+            "update": "13"
         },
         {
             "id": "f4d09c1b8a27",
