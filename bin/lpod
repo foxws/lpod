@@ -152,6 +152,7 @@ function display_help {
     echo "  ${GREEN}lpod APP remove --json${NC}                  Remove an application ([--volumes] [--images] [--secrets])"
     echo "  ${GREEN}lpod containers --json${NC}                  Every container, managed by Quadlet or not"
     echo "  ${GREEN}lpod containers prune --json${NC}            Remove the stopped containers"
+    echo "  ${GREEN}lpod pods --json${NC}                        Every pod, with its application, containers and ports"
     echo "  ${GREEN}lpod container NAME ACTION --json${NC}       Inspect, show the logs or stats of, start, stop or restart a container"
     echo "  ${GREEN}lpod events --json${NC}                      Recent container and image events ([--since 24h] [--limit N])"
     echo "  ${GREEN}lpod images [prune] --json${NC}              Images, or remove the ones no container uses"
@@ -1962,6 +1963,51 @@ function cmd_auto_update_json {
     json_ok
 }
 
+# "lpod pods --json": every pod, with the application its Quadlet (or the
+# Quadlets of its containers) belong to, its containers and the ports its
+# infra container publishes...
+function cmd_pods_json {
+    require_jq
+
+    local PODMAN="${LPOD_PODMAN_BINARY:-podman}"
+    local PODS PS UNITS
+    PODS="$("$PODMAN" pod ps --format json)" || return 1
+    PS="$("$PODMAN" ps --all --format json)" || return 1
+    UNITS="$(quadlet_units_json 2>/dev/null)" || UNITS="[]"
+
+    jq -n \
+        --argjson contract "$LPOD_CONTRACT" \
+        --slurpfile pods <(printf '%s' "${PODS:-[]}") \
+        --slurpfile ps <(printf '%s' "${PS:-[]}") \
+        --slurpfile units <(printf '%s' "${UNITS:-[]}") '
+        $pods[0] as $pods | $ps[0] as $ps | $units[0] as $units
+        | def unit($name): if $name == null then null else first($units[] | select(.UnitName == $name)) // null end;
+        def time: if . == null or . == "" then null else sub("\\.[0-9]+"; "") end;
+        ($pods // [])
+        | map(
+            . as $pod
+            | ($ps // [] | map(select(.Pod == $pod.Id))) as $members
+            | (first($members[] | select(.IsInfra // false)) // null) as $infra
+            | ($members | map(select((.IsInfra // false) | not))) as $containers
+            | unit(($pod.Labels // {}).PODMAN_SYSTEMD_UNIT // ($infra.Labels // {}).PODMAN_SYSTEMD_UNIT // null) as $own
+            | (first($containers[] | unit((.Labels // {}).PODMAN_SYSTEMD_UNIT // null) | select(. != null)) // null) as $member
+            | {
+                id: (.Id[0:12]),
+                name: .Name,
+                status: ((.Status // "unknown") | ascii_downcase),
+                application: (($own // $member).app // null),
+                quadlet: ($own.Name // null),
+                unit: ($own.UnitName // null),
+                containers: ($containers | length),
+                running: ($containers | map(select(.State == "running")) | length),
+                ports: [($infra.Ports // [])[] | "\(if (.host_ip // "") == "" then "0.0.0.0" else .host_ip end):\(.host_port)->\(.container_port)/\(.protocol // "tcp")"],
+                networks: (.Networks // []),
+                created_at: (.Created | time)
+            })
+        | sort_by(.application == null, .application, .name)
+        | {contract: $contract, pods: .}'
+}
+
 # "lpod containers prune --json": removes every stopped container. Quadlet
 # recreates its containers when their units start...
 function cmd_containers_prune_json {
@@ -2845,6 +2891,7 @@ if json_requested "$@"; then
         quadlet) shift; cmd_quadlet_json "$@"; exit $? ;;
         settings) shift; cmd_settings_json "$@"; exit $? ;;
         events) shift; cmd_events_json "$@"; exit $? ;;
+        pods) cmd_pods_json; exit $? ;;
     esac
 fi
 
