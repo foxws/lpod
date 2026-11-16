@@ -83,16 +83,12 @@ With `xdebug.start_with_request=trigger`, a session only starts for requests tha
 
 | Command                                | Description                                                  |
 | ----------------------------------------- | ---------------------------------------------------------------- |
-| `lpod setup ...`                       | Render presets without PHP on the host (needs `lpod-setup`, shipped alongside `lpod`) |
-| `lpod install PRESET/SERVICE.quadlets` | Install a rendered Quadlet                                   |
-| `lpod install PRESET/UNIT.socket`      | Install and enable a rendered systemd socket or timer        |
-| `lpod remove NAME`                     | Remove an installed Quadlet, socket or timer                 |
+| `lpod install PATH`                    | Install Quadlet files (`podman quadlet install`)             |
+| `lpod remove NAME`                     | Remove an installed Quadlet                                  |
 | `lpod uninstall APPLICATION`           | Remove an application and all of its Quadlets                |
 | `lpod list`                            | List installed Quadlets                                      |
 | `lpod print NAME`                      | Print the generated systemd unit                              |
 | `lpod reload`                          | Reload the systemd manager configuration (`daemon-reload`)    |
-
-Rendered `.socket` and `.timer` units, such as those for [on-demand services](https://foxws.nl/laravel-podman/ondemand), aren't Quadlets. `lpod install` copies them to `~/.config/systemd/user/` (or `/etc/systemd/system/` as root), along with the `.service` of the same name if it was rendered, and enables them. Units a socket or timer lists in `Wants=` that were rendered next to it, such as an on-demand socket's idle timer, are installed and started with it. For an instance of a template, such as `laravel-idle@my-app.timer`, that's the template (`laravel-idle@.timer` and `laravel-idle@.service`) and the instance's drop-in folder (`laravel-idle@my-app.service.d`). Pass `--replace` to overwrite installed ones; templates are shared by every app on the host, so they're always replaced. `lpod remove NAME.socket` disables and deletes them again, along with those wanted units. Of a template instance it only removes the drop-in folder, and leaves the template for the other apps.
 
 Every Quadlet management command except `reload` accepts the same extra flags as `podman quadlet` itself — things like `--replace`, `--application`, `--force`, or `--ignore`. The `secrets` command (see [Lifecycle](#lifecycle) above) also forwards extra flags, but to `podman secret create` instead.
 
@@ -106,28 +102,6 @@ Every Quadlet management command except `reload` accepts the same extra flags as
 If the same secret name is used more than once, `lpod` only asks for it once.
 
 For an `env` secret, leaving the value blank (just pressing Enter) skips it and keeps its current value untouched. This makes it easy to update a single secret with `lpod app secrets --replace` without having to re-enter every other one.
-
-## On-demand idle check
-
-| Command                         | Description                                                            |
-| -------------------------------- | ----------------------------------------------------------------------- |
-| `lpod idle APPLICATION`         | Run the application's idle check once, and show what it did             |
-| `lpod idle disable APPLICATION` | Turn off the `lpod-idle@APPLICATION.timer` of lpod releases before v3   |
-
-An [on-demand](https://foxws.nl/laravel-podman/ondemand) app stops when it's idle, but its queue workers and scheduler timer keep running, and they keep the database and cache awake. The idle check stops them once the app has no work left. It's part of [laravel-podman](https://foxws.nl/laravel-podman/ondemand#the-idle-check) 6.1 and later: the `ondemand` preset renders the shared `laravel-idle@.timer` and `laravel-idle@.service` templates and the app's `laravel-idle@APPLICATION.service.d` drop-in next to the socket (`APPLICATION-idle.timer` and `APPLICATION-idle.service` from 6.1 to 6.3), and the socket starts the timer. `lpod install ondemand/APPLICATION-ondemand.socket` installs them with it, so there's nothing to enable. The workers it checks are set with `PODMAN_ONDEMAND_IDLE_WORKERS`.
-
-See how a run went with `journalctl --user -u laravel-idle@APPLICATION` (`APPLICATION-idle` before laravel-podman 6.4).
-
-### Moving from lpod v2
-
-lpod v2 ran its own copy of the check from `lpod-idle@APPLICATION.timer`. That timer keeps working after the upgrade, since it runs `lpod idle APPLICATION`, but it only duplicates the socket's check. Once laravel-podman is on 6.1, reinstall the socket and turn the old timer off:
-
-```bash
-lpod install ondemand/my-app-ondemand.socket --replace
-lpod idle disable my-app
-```
-
-Workers you listed in `LPOD_IDLE_WORKERS` go in `PODMAN_ONDEMAND_IDLE_WORKERS` now. `lpod idle enable` only prints how to install the socket.
 
 ## JSON contract
 
@@ -192,7 +166,6 @@ The `tests/fixtures/contract-1` folder holds an example payload for each command
 - that jq is installed, for the [JSON commands](#json-contract);
 - that the systemd manager is reachable;
 - for rootless services: linger, your entries in `/etc/subuid` and `/etc/subgid`, and whether containers may publish ports 80 and 443 for the proxy (`net.ipv4.ip_unprivileged_port_start`);
-- that no app still uses the [idle check](#moving-from-lpod-v2) of lpod releases before v3;
 - that the host trusts the proxy's local certificate, when the proxy runs;
 - that the host in `APP_URL`, from the `.env` in the current directory, resolves;
 - that no services have failed.
@@ -214,13 +187,13 @@ It changes nothing. It prints how to fix each problem, and the commands that nee
 }
 ```
 
-The ids are `podman`, `jq`, `systemd`, `linger`, `subids`, `ports`, `idle-timers`, `proxy-certificate`, `app-url` and `failed-services`. Checks that don't apply, such as the rootless ones when running as root, are left out.
+The ids are `podman`, `jq`, `systemd`, `linger`, `subids`, `ports`, `proxy-certificate`, `app-url` and `failed-services`. Checks that don't apply, such as the rootless ones when running as root, are left out.
 
 ## Updating
 
 | Command                      | Description                                                         |
 | ----------------------------- | -------------------------------------------------------------------- |
-| `lpod self-update [VERSION]` | Upgrade `lpod` and `lpod-setup` in place, to the latest or the given release |
+| `lpod self-update [VERSION]` | Upgrade `lpod` in place, to the latest or the given release |
 | `lpod --version`             | Show the installed version                                          |
 
 > **Warning:** `remove` and `uninstall` delete the Podman volumes owned by the services they remove. This cannot be undone.

@@ -18,14 +18,14 @@ jobs:
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
           sed -i "s/^LPOD_VERSION=\"dev\"\$/LPOD_VERSION=\"${VERSION}\"/" bin/lpod
-          chmod +x bin/lpod bin/lpod-setup install.sh
+          chmod +x bin/lpod install.sh
           ./bin/lpod --version
 
       - name: Collect the release assets and their checksums
         run: |
           mkdir dist
-          cp bin/lpod bin/lpod-setup install.sh dist/
-          (cd dist && sha256sum lpod lpod-setup install.sh > SHA256SUMS)
+          cp bin/lpod install.sh dist/
+          (cd dist && sha256sum lpod install.sh > SHA256SUMS)
           cat dist/SHA256SUMS
 
       - name: Create or update GitHub release

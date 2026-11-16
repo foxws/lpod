@@ -11,7 +11,7 @@ Run the installer:
 curl -fsSL https://github.com/foxws/lpod/releases/latest/download/install.sh | bash
 ```
 
-It installs `lpod` and `lpod-setup` to `~/.local/bin` (`/usr/local/bin` as root). It also offers to enable linger, so your services start at boot without logging in.
+It installs `lpod` to `~/.local/bin` (`/usr/local/bin` as root). It also offers to enable linger, so your services start at boot without logging in.
 
 The installer:
 - **Checks the downloads.** Each one is verified against the release's `SHA256SUMS` before anything is replaced. A failed download or checksum leaves your current install as it was.
@@ -40,7 +40,7 @@ lpod self-update v2.2.0     # or a specific one
 curl -fsSL https://github.com/foxws/lpod/releases/latest/download/install.sh | bash -s -- --uninstall
 ```
 
-This disables the `lpod-idle@*.timer` idle checks of releases before v3, then removes their templates, `lpod` and `lpod-setup`. Your services, secrets and volumes stay as they are. Remove those first with `lpod uninstall APPLICATION` if you want them gone too.
+This removes `lpod`, and what older releases left: the `lpod-setup` of releases before v4, and the `lpod-idle@*.timer` idle checks of releases before v3 (disabled first). Your services, secrets and volumes stay as they are. Remove those first with `lpod uninstall APPLICATION` if you want them gone too.
 
 ## Installing by hand
 
@@ -58,15 +58,6 @@ The installer takes `LPOD_VERSION`. By hand, download the release directly:
 ```sh
 curl -fsSL -o ~/.local/bin/lpod https://github.com/foxws/lpod/releases/download/v0.1.0/lpod
 chmod +x ~/.local/bin/lpod
-```
-
-## Optional: lpod-setup
-
-`lpod setup` needs a second binary, `lpod-setup`. It renders presets on a host that has Podman but no PHP — see [foxws/laravel-podman](https://github.com/foxws/laravel-podman). The installer includes it. By hand, download it the same way:
-
-```sh
-curl -fsSL -o ~/.local/bin/lpod-setup https://github.com/foxws/lpod/releases/latest/download/lpod-setup
-chmod +x ~/.local/bin/lpod-setup
 ```
 
 ## Installing from source
