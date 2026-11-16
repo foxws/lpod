@@ -23,7 +23,6 @@
                 "01:00",
                 "02:00"
             ],
-            "timezone": "UTC",
             "environment": {
                 "APP_COMMAND": "php -d variables_order=EGPCS /app/artisan schedule:run",
                 "APP_OPTIMIZE": "false"

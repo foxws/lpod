@@ -1197,13 +1197,13 @@ function valid_port {
 }
 
 # Prints the systemd calendar time of a "--schedule-at" time ("*:MM" or
-# "HH:MM"), and with "early", the one 30 seconds before it...
+# "HH:MM", in UTC), and with "early", the one 30 seconds before it...
 function ondemand_calendar {
     local HOUR="${1%%:*}"
     local MINUTE="${1##*:}"
     local SECOND="00"
 
-    if [ "${3:-}" == "early" ]; then
+    if [ "${2:-}" == "early" ]; then
         SECOND="30"
         MINUTE=$((10#$MINUTE - 1))
 
@@ -1222,7 +1222,7 @@ function ondemand_calendar {
         fi
     fi
 
-    echo "*-*-* ${HOUR}:${MINUTE}:${SECOND} ${2}"
+    echo "*-*-* ${HOUR}:${MINUTE}:${SECOND} UTC"
 }
 
 # Prints the name and path of the container Quadlet NAME (without the
@@ -1254,14 +1254,13 @@ function cmd_app_ondemand_enable {
     local APPLICATION="$1"
     shift
 
-    local PORT="" LOCAL_PORT="" APP_PORT="" IDLE_TIMEOUT="10min"
-    local IDLE_CONTAINER="" IDLE_USER="" IDLE_COMMAND="" SCHEDULE="" TIMEZONE="UTC"
+    local PORT="" APP_PORT="" IDLE_TIMEOUT="10min"
+    local IDLE_CONTAINER="" IDLE_USER="" IDLE_COMMAND="" SCHEDULE=""
     local WORKERS=() SCHEDULE_AT=() SCHEDULE_ENV=()
 
     while [ $# -gt 0 ]; do
         case "$1" in
             --port) PORT="${2:-}"; valid_port "$1" "$PORT" || return 1; shift ;;
-            --local-port) LOCAL_PORT="${2:-}"; valid_port "$1" "$LOCAL_PORT" || return 1; shift ;;
             --app-port) APP_PORT="${2:-}"; valid_port "$1" "$APP_PORT" || return 1; shift ;;
             --idle-timeout) IDLE_TIMEOUT="${2:-}"; shift ;;
             --worker) WORKERS+=("${2:-}"); shift ;;
@@ -1271,7 +1270,6 @@ function cmd_app_ondemand_enable {
             --schedule) SCHEDULE="${2:-}"; shift ;;
             --schedule-at) SCHEDULE_AT+=("${2:-}"); shift ;;
             --schedule-env) SCHEDULE_ENV+=("${2:-}"); shift ;;
-            --schedule-timezone) TIMEZONE="${2:-}"; shift ;;
             --json) ;;
             *) echo "Unknown option: $1" >&2; return 1 ;;
         esac
@@ -1285,18 +1283,12 @@ function cmd_app_ondemand_enable {
         return 1
     fi
 
-    if [ -z "$LOCAL_PORT" ]; then
-        LOCAL_PORT=$((PORT + 10000))
+    # The app gets the socket's port + 10000 on 127.0.0.1, where the proxy
+    # forwards to...
+    local LOCAL_PORT=$((PORT + 10000))
 
-        if [ "$LOCAL_PORT" -gt 65535 ]; then
-            echo "Pass the port the app gets on 127.0.0.1 with --local-port." >&2
-
-            return 1
-        fi
-    fi
-
-    if [ "$LOCAL_PORT" == "$PORT" ]; then
-        echo "--local-port must differ from --port." >&2
+    if [ "$LOCAL_PORT" -gt 65535 ]; then
+        echo "--port must be 55535 or lower, since the app gets that port + 10000 on 127.0.0.1." >&2
 
         return 1
     fi
@@ -1358,12 +1350,6 @@ function cmd_app_ondemand_enable {
             return 1
         fi
     done
-
-    if [ -n "$SCHEDULE" ] && { ! [[ "$TIMEZONE" =~ ^[A-Za-z0-9_+/-]+$ ]] || ! systemd-analyze calendar -- "*-*-* 00:00:00 ${TIMEZONE}" > /dev/null 2>&1; }; then
-        echo "--schedule-timezone takes a timezone, such as UTC or Europe/Amsterdam." >&2
-
-        return 1
-    fi
 
     local VARIABLE
 
@@ -1427,7 +1413,6 @@ function cmd_app_ondemand_enable {
         --arg idle_user "$IDLE_USER" \
         --arg idle_command "$IDLE_COMMAND" \
         --arg schedule "$SCHEDULE" \
-        --arg timezone "$TIMEZONE" \
         --args '
         def list($name): $ARGS.positional | map(select(startswith($name + "=")) | ltrimstr($name + "="));
         {
@@ -1440,7 +1425,6 @@ function cmd_app_ondemand_enable {
             schedule: (if $schedule == "" then null else {
                 container: $schedule,
                 at: list("at"),
-                timezone: $timezone,
                 environment: (list("env") | map(capture("^(?<key>[^=]+)=(?<value>.*)$")) | from_entries)
             } end)
         }' \
@@ -1480,7 +1464,7 @@ function cmd_app_ondemand_enable {
     mkdir -p "$SYSTEMD_UNIT_PATH" || return 1
 
     {
-        echo "# Written by \"lpod ${APP_NAME} ondemand enable\". Turn it off with \"lpod ${APP_NAME} ondemand disable\"."
+        echo "# Written by \"lpod ${APP_NAME} ondemand enable\". See \"On-demand\" in lpod's docs/commands.md."
         echo "# lpod-ondemand: ${SETTINGS}"
         echo "[Unit]"
         echo "Description=${APP_NAME} on-demand socket"
@@ -1493,9 +1477,7 @@ function cmd_app_ondemand_enable {
     } > "${SYSTEMD_UNIT_PATH}/${SOCKET}" || return 1
 
     {
-        echo "# Written by \"lpod ${APP_NAME} ondemand enable\". Started by ${SOCKET}: it starts the app, forwards the"
-        echo "# socket's connections to it, and exits after ${IDLE_TIMEOUT} without connections. The app"
-        echo "# (StopWhenUnneeded=yes) then stops, and so do the services it needs."
+        echo "# Written by \"lpod ${APP_NAME} ondemand enable\". See \"On-demand\" in lpod's docs/commands.md."
         echo "[Unit]"
         echo "Description=${APP_NAME} on-demand proxy"
         echo "Requires=${MAIN_UNIT} ${SOCKET}"
@@ -1510,10 +1492,7 @@ function cmd_app_ondemand_enable {
     mkdir -p "$MAIN_DROPIN" || return 1
 
     {
-        echo "# Written by \"lpod ${APP_NAME} ondemand enable\". Lets ${SOCKET} start and stop the app: it"
-        echo "# no longer starts at boot, stops once the on-demand proxy is gone, and listens on"
-        echo "# 127.0.0.1:${LOCAL_PORT}, where the proxy forwards to. The empty lines clear what the"
-        echo "# Quadlet or another drop-in sets."
+        echo "# Written by \"lpod ${APP_NAME} ondemand enable\". See \"On-demand\" in lpod's docs/commands.md."
         echo "[Unit]"
         echo "StopWhenUnneeded=yes"
         echo
@@ -1535,10 +1514,7 @@ function cmd_app_ondemand_enable {
 
     if [ ${#WORKERS[@]} -gt 0 ]; then
         {
-            echo "# Written by \"lpod ${APP_NAME} ondemand enable\". ${IDLE_TIMER} starts it every minute while"
-            echo "# ${SOCKET} listens. Once the app is asleep, the scheduler isn't running and the idle"
-            echo "# command finds no work left, it stops the workers, so the services they need can sleep"
-            echo "# too. The next request starts them again."
+            echo "# Written by \"lpod ${APP_NAME} ondemand enable\". See \"On-demand\" in lpod's docs/commands.md."
             echo "[Unit]"
             echo "Description=${APP_NAME} idle check"
             echo
@@ -1587,9 +1563,7 @@ function cmd_app_ondemand_enable {
         } > "$IDLE_SERVICE" || return 1
 
         {
-            echo "# Written by \"lpod ${APP_NAME} ondemand enable\". Started by ${SOCKET}'s Wants= line, and"
-            echo "# stopped with it. It fires between :10 and :25, clear of the scheduler at :00 and"
-            echo "# its wake-ups at :30."
+            echo "# Written by \"lpod ${APP_NAME} ondemand enable\". See \"On-demand\" in lpod's docs/commands.md."
             echo "[Unit]"
             echo "Description=${APP_NAME} idle check timer"
             echo "PartOf=${SOCKET}"
@@ -1610,9 +1584,7 @@ function cmd_app_ondemand_enable {
         # so the timer fires within a second (AccuracySec=1s), never later,
         # and runs missed while the host was off aren't made up at boot...
         {
-            echo "# Written by \"lpod ${APP_NAME} ondemand enable\". Starts ${SCHEDULE} only in the minutes a"
-            echo "# task is due, with a wake-up 30 seconds before each, so the services it needs are"
-            echo "# up in time. Keep AccuracySec=1s: a later start would skip the tasks."
+            echo "# Written by \"lpod ${APP_NAME} ondemand enable\". See \"On-demand\" in lpod's docs/commands.md."
             echo "[Unit]"
             echo "Description=${APP_NAME} schedule timer"
             echo "PartOf=${SOCKET}"
@@ -1621,11 +1593,11 @@ function cmd_app_ondemand_enable {
             echo "Unit=${SCHEDULE}.service"
 
             for TIME in "${SCHEDULE_AT[@]}"; do
-                echo "OnCalendar=$(ondemand_calendar "$TIME" "$TIMEZONE")"
+                echo "OnCalendar=$(ondemand_calendar "$TIME")"
             done
 
             for TIME in "${SCHEDULE_AT[@]}"; do
-                echo "OnCalendar=$(ondemand_calendar "$TIME" "$TIMEZONE" early)"
+                echo "OnCalendar=$(ondemand_calendar "$TIME" early)"
             done
 
             echo "AccuracySec=1s"
@@ -1639,9 +1611,7 @@ function cmd_app_ondemand_enable {
         mkdir -p "$SCHEDULE_DROPIN" || return 1
 
         {
-            echo "# Written by \"lpod ${APP_NAME} ondemand enable\". Turns ${SCHEDULE} into a oneshot that"
-            echo "# ${SCHEDULE}.timer starts in the minutes a task is due. When the timer's wake-up (at :30)"
-            echo "# started it, it waits for the due minute, after the services it needs started."
+            echo "# Written by \"lpod ${APP_NAME} ondemand enable\". See \"On-demand\" in lpod's docs/commands.md."
 
             if [ -n "$REQUIRES" ]; then
                 echo "[Unit]"
