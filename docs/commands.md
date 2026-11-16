@@ -103,6 +103,46 @@ If the same secret name is used more than once, `lpod` only asks for it once.
 
 For an `env` secret, leaving the value blank (just pressing Enter) skips it and keeps its current value untouched. This makes it easy to update a single secret with `lpod app secrets --replace` without having to re-enter every other one.
 
+## On-demand
+
+`lpod APP ondemand enable` lets a systemd socket start an application on its first request, and lets the application and the services it needs sleep when nobody uses it. The application only names its units; lpod writes the rest:
+
+| File | Role |
+| --- | --- |
+| `APP-ondemand.socket` | Listens on `--port`, and starts the proxy on the first connection |
+| `APP-ondemand.service` | `systemd-socket-proxyd`: starts the app, forwards to `127.0.0.1:LOCAL_PORT`, and exits after `--idle-timeout` without connections |
+| `lpod-ondemand.conf` for the main unit | Publishes the app's `--app-port` only on `127.0.0.1:LOCAL_PORT`, stops it from starting at boot, and lets it stop once the proxy is gone (`StopWhenUnneeded=yes`) |
+| `APP-idle.service`, `APP-idle.timer` | With `--worker`: every minute, once the app is asleep, the scheduler isn't running and the `--idle-command` succeeds, stops the workers, so the services they need can sleep too |
+| `SCHEDULE.timer`, `lpod-ondemand.conf` for the scheduler | With `--schedule`: turns the scheduler container into a oneshot that only runs at the `--schedule-at` minutes |
+
+```bash
+lpod stry ondemand enable --json \
+    --port 8000 --app-port 8000 \
+    --worker stry-horizon \
+    --idle-container stry-horizon --idle-user docker \
+    --idle-command "php -d variables_order=EGPCS /app/artisan app:idle" \
+    --schedule stry-schedule --schedule-at "*:00" --schedule-at 02:00 \
+    --schedule-env "APP_COMMAND=php -d variables_order=EGPCS /app/artisan schedule:run"
+```
+
+| Option | Description |
+| --- | --- |
+| `--port PORT` | The port the socket listens on, on every address. A proxy sends the app's hostname here |
+| `--app-port PORT` | The port the app listens on inside its container |
+| `--local-port PORT` | The port the app gets on `127.0.0.1`, where the proxy forwards to (default: `--port` + 10000) |
+| `--idle-timeout SPAN` | How long the proxy waits without connections before the app stops (default `10min`) |
+| `--worker NAME` | A container Quadlet of the app that keeps running after the app stops, such as a queue worker. Repeat it for more. The idle check stops them |
+| `--idle-container NAME`, `--idle-command CMD` | The command the idle check runs in that container with `podman exec`. It succeeds when there's no work left. The command is split on whitespace, without quotes |
+| `--idle-user USER` | The user `podman exec` runs the idle command as |
+| `--schedule NAME` | The scheduler's container Quadlet |
+| `--schedule-at TIME` | A minute the scheduler runs in, as `*:MM` (every hour) or `HH:MM` (every day). Repeat it for more. Each one also gets a wake-up 30 seconds before it, which starts the services the scheduler needs; the scheduler then waits for the due minute |
+| `--schedule-timezone TZ` | The timezone of `--schedule-at` (default `UTC`) |
+| `--schedule-env KEY=VALUE` | An `Environment=` line for the scheduler, such as the command that runs the due tasks once. Repeat it for more. Values can't contain `$` |
+
+The app's container (or pod) is its main unit, as in the [JSON contract](#json-contract). The scheduler also gets the main unit's `Requires=`, with `After=`, since it now runs while the app sleeps. Enabling stops every unit of the application, so the app starts on the next request with the new port. Enabling again replaces what the last enable wrote. `lpod APP ondemand disable` removes it all and starts the app again, which then also starts at boot. `lpod idle APPLICATION` runs the idle check once.
+
+The idle check needs the app's Quadlets to be installed as an application (`podman quadlet install --application`), so its units are known by name. The settings are kept on the `# lpod-ondemand:` line of the socket, so don't edit it by hand: run `enable` again instead.
+
 ## JSON contract
 
 Tools such as Pods manage a host by running these commands over SSH. With `--json`, each one prints a single JSON object with a `contract` key, the version of the shapes below. A tool refuses a contract it doesn't know, and a breaking change to any of them bumps it. They need [jq](https://jqlang.org).
@@ -121,6 +161,9 @@ Tools such as Pods manage a host by running these commands over SSH. With `--jso
 | `lpod APP down --force --json` | `{"ok": true}`. Stops every unit of the application right away: it queues the stop (so `Restart=` doesn't start them again), kills their processes with SIGKILL, waits up to 10 seconds for them to go down, then clears their failed state and start limit with `reset-failed`. For an application stuck starting, in a restart loop or slow to shut down |
 | `lpod APP redeploy --json [--no-block]` | `{"ok": true}`. Pulls every image the application's containers use, except ones built on the host (`localhost/...`), then restarts its main unit. With `--no-block`, a transient unit, `lpod-redeploy-APP`, does the work and logs to the journal |
 | `lpod APP secret add NAME --type env\|mount --target TARGET --json` | `{"ok": true}`. Writes the drop-in `lpod-secret-NAME.conf` for the application's main container, next to its Quadlet |
+| `lpod APP ondemand enable --json --port PORT --app-port PORT [...]` | `{"ok": true}`. Lets a socket start the application on its first request, and its units sleep when idle. See [On-demand](#on-demand) for the options |
+| `lpod APP ondemand disable --json` | `{"ok": true}`. Removes what `enable` wrote, and starts the application again |
+| `lpod APP ondemand status --json` | `ondemand`: whether it's `enabled`, whether the socket is `listening`, whether the app is `awake` (its main unit runs), and the settings it was enabled with: `port`, `local_port`, `app_port`, `idle_timeout`, `workers`, `idle_check` (`container`, `user` and `command`, or `null`) and `schedule` (`container`, `at`, `timezone` and `environment`, or `null`). They're `null` (`workers` empty) when it's off |
 | `lpod secret rm NAME [--json]` | `{"ok": true}` |
 | `lpod APP remove --json [--volumes] [--images] [--secrets]` | `{"ok": true}`. Stops the application and removes its Quadlets. With the flags, also its volumes, and the images and secrets no other application uses |
 | `lpod containers --json` | `containers`: every container, managed by Quadlet or not, with its `state`, `health`, `exit_code`, `application`, `quadlet`, `unit`, `pod`, `ports`, CPU and memory use and `started_at` |
