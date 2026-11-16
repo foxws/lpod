@@ -137,7 +137,7 @@ Tools such as Pods manage a host by running these commands over SSH. With `--jso
 | --- | --- |
 | `lpod version --json` | `contract`, `lpod`, `podman`, `systemd`, `scope` (`rootless` or `rootful`), `user` and `hostname` |
 | `lpod apps [--json]` | `applications`: each installed application with its main unit, `kind`, `status`, `result`, `since`, `image`, `ports`, `memory`, `auto_update`, its `io.foxws.pods.*` labels, and the last `error` of a failed one |
-| `lpod host [--json]` | `cpu`, `memory`, `disk` (of Podman's graph root), `containers` and `auto_update` (the next `podman-auto-update.timer` run) |
+| `lpod host [--json]` | `cpu` (with the `load` averages), `memory` (with swap), `disk` (of Podman's graph root), `containers`, `auto_update` (the next `podman-auto-update.timer` run), `system` (`os`, `kernel`, `booted_at`, `storage_driver`, `network_backend`, `quadlet_dir` and `linger`, which is `null` as root) and the number of `active` and `failed` Quadlet `units` |
 | `lpod secrets [--json]` | `secrets` with the applications whose Quadlets use them (`used_by`), and the `missing` ones that Quadlets use but don't exist |
 | `lpod secret create NAME --stdin [--driver file\|pass\|shell] [--replace] [--json]` | `{"ok": true}`. The value comes from stdin only, never the command line |
 | `lpod APP status --json` | `application`: what `apps` prints, plus its `path`, `volumes`, `secrets` and containers (`items`) with their CPU and memory use |
@@ -164,12 +164,14 @@ Tools such as Pods manage a host by running these commands over SSH. With `--jso
 | `lpod quadlet check --stdin --json` | `valid`, `errors` and the `units` the files generate, from the Quadlet generator's `-dryrun`, next to the installed Quadlets |
 | `lpod quadlet install APP --stdin --json [--replace] [--start]` | `{"ok": true}`. Installs the files as the application `APP` with `podman quadlet install --application`. `--start` starts its units without waiting |
 | `lpod quadlet fetch URL --ref REF --json [--path DIR]` | `commit` and `files` (name and content) of a directory of a Git repository, without installing them. Takes `https://`, `ssh://` and `git@` URLs |
+| `lpod settings --json` | `settings`: the `auto_update` timer (`enabled`, its `OnCalendar` `schedule`, whether a failed update rolls back, `next_run` and `last_run`), `linger` (`null` as root) and `quadlet_dir` |
+| `lpod settings set --json [--auto-update on\|off] [--schedule ONCALENDAR] [--rollback on\|off] [--linger on\|off]` | `{"ok": true}`. Changes only the settings given. The schedule and rollback are drop-ins (`lpod-schedule.conf`, `lpod-rollback.conf`) for `podman-auto-update.timer` and `.service`. `--linger` runs `loginctl enable-linger` or `disable-linger`, and does nothing as root |
 
 An application is what `podman quadlet install --application` (or `lpod install`) grouped the Quadlets under. `APP` is its name, or the name of one of its Quadlets without the extension. Its main unit is its pod, or else its kube, or else the container with the shortest name. A Quadlet installed without an application is an application of its own.
 
 On failure, the commands print the reason on stderr and exit with an error. Volume sizes are `null` for now, because working them out takes too long for a page load.
 
-`quadlet check` and `quadlet install` read `{"files": [{"name": ..., "content": ...}]}` on stdin. File names are plain Quadlet file names, so nothing is written outside the Quadlet directory. The commands for containers, images, volumes, networks, the journal and Quadlet files only answer with `--json`, so the same words stay free as service names.
+`quadlet check` and `quadlet install` read `{"files": [{"name": ..., "content": ...}]}` on stdin. File names are plain Quadlet file names, so nothing is written outside the Quadlet directory. The commands for containers, images, volumes, networks, the journal, Quadlet files and settings only answer with `--json`, so the same words stay free as service names.
 
 The `tests/fixtures/contract-1` folder holds an example payload for each command.
 

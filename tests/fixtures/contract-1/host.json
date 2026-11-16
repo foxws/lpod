@@ -1,8 +1,18 @@
 {
     "contract": 1,
-    "cpu": { "cores": 8, "usage": 18.2 },
-    "memory": { "used": 6871947674, "total": 17179869184 },
+    "cpu": { "cores": 8, "usage": 18.2, "load": [1.42, 0.98, 0.87] },
+    "memory": { "used": 6871947674, "total": 17179869184, "swap_used": 0, "swap_total": 8589934592 },
     "disk": { "path": "/home/blue/.local/share/containers/storage", "used": 44023414784, "total": 128849018880 },
     "containers": { "running": 12, "total": 14 },
-    "auto_update": { "enabled": true, "next_run": "2026-11-15T15:00:00+00:00" }
+    "auto_update": { "enabled": true, "next_run": "2026-11-15T15:00:00+00:00" },
+    "system": {
+        "os": "Fedora Linux 45",
+        "kernel": "7.3.0-100.fc45.x86_64",
+        "booted_at": "2026-10-23T08:12:00+00:00",
+        "storage_driver": "overlay",
+        "network_backend": "netavark",
+        "quadlet_dir": "~/.config/containers/systemd",
+        "linger": true
+    },
+    "units": { "active": 9, "failed": 1 }
 }

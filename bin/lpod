@@ -162,6 +162,7 @@ function display_help {
     echo "  ${GREEN}lpod quadlet install APP --stdin --json${NC} Install Quadlet files as an application ([--replace] [--start])"
     echo "  ${GREEN}lpod quadlet fetch URL --ref REF --json${NC} List the files of a Git repository directory ([--path DIR])"
     echo "  ${GREEN}lpod secret rm NAME [--json]${NC}            Remove a secret"
+    echo "  ${GREEN}lpod settings [set] --json${NC}              The auto-update timer and lingering, or change them ([--auto-update on|off] [--schedule S] [--rollback on|off] [--linger on|off])"
     echo
     echo "${YELLOW}Troubleshooting:${NC}"
     echo "  ${GREEN}lpod doctor [--json]${NC}            Check the host for what the services need, and how to fix what's missing"
@@ -1091,13 +1092,39 @@ function cmd_apps {
     jq -r '(["APPLICATION", "STATUS", "UNIT", "IMAGE"], (.[] | [.name, .status, .unit, (.image // "")])) | @tsv' <<< "$APPLICATIONS" | column -t -s $'\t'
 }
 
+# The PRETTY_NAME of /etc/os-release, e.g. "Fedora Linux 45 (Server Edition)"...
+function os_name {
+    awk -F= '$1 == "PRETTY_NAME" { gsub(/^"|"$/, "", $2); print $2 }' /etc/os-release 2>/dev/null
+}
+
+# PATH with the home directory written as "~"...
+function home_path {
+    local PATH_NAME="$1"
+
+    if [ "${PATH_NAME#"$HOME"}" != "$PATH_NAME" ]; then
+        echo "~${PATH_NAME#"$HOME"}"
+    else
+        echo "$PATH_NAME"
+    fi
+}
+
+# "yes" or "no" for whether systemd keeps the user's services running after
+# they log out, or nothing as root, where it doesn't apply...
+function linger_state {
+    if [ "$(id -u)" -eq 0 ]; then
+        return
+    fi
+
+    loginctl show-user "$(id -un)" --property=Linger --value 2>/dev/null
+}
+
 # "lpod host [--json]": CPU, memory and disk use, the container counts, and
 # when "podman auto-update" runs next...
 function cmd_host {
     require_jq
 
     local PODMAN="${LPOD_PODMAN_BINARY:-podman}"
-    local CPU_USAGE GRAPH_ROOT DISK CONTAINERS TIMER
+    local CPU_USAGE INFO GRAPH_ROOT STORAGE_DRIVER NETWORK_BACKEND DISK CONTAINERS TIMER UNITS STATES
 
     # Two samples of /proc/stat, a quarter second apart...
     CPU_USAGE="$({ head -n 1 /proc/stat; sleep 0.25; head -n 1 /proc/stat; } | awk '
@@ -1105,31 +1132,58 @@ function cmd_host {
         NR == 1 { idle1 = idle; total1 = total }
         NR == 2 { if (total - total1 > 0) printf "%.1f", 100 * (1 - (idle - idle1) / (total - total1)); else print 0 }')"
 
-    GRAPH_ROOT="$("$PODMAN" info --format '{{.Store.GraphRoot}}' 2>/dev/null)"
+    INFO="$("$PODMAN" info --format '{{.Store.GraphRoot}}{{"\t"}}{{.Store.GraphDriverName}}{{"\t"}}{{.Host.NetworkBackend}}' 2>/dev/null)"
+    IFS=$'\t' read -r GRAPH_ROOT STORAGE_DRIVER NETWORK_BACKEND <<< "$INFO"
     DISK="$(df --block-size=1 --output=used,size "${GRAPH_ROOT:-$HOME}" 2>/dev/null | awk 'NR == 2 { print $1, $2 }')"
     CONTAINERS="$("$PODMAN" ps --all --format '{{.State}}' 2>/dev/null | awk '{ total++ } $1 == "running" { running++ } END { print running + 0, total + 0 }')"
     TIMER="$("${SYSTEMCTL_CMD[@]}" show podman-auto-update.timer --property=ActiveState,NextElapseUSecRealtime --timestamp=unix 2>/dev/null)"
+    UNITS="$(quadlet_units_json 2>/dev/null)" || UNITS="[]"
+    STATES="$(unit_states_json "${UNITS:-[]}" 2>/dev/null)" || STATES="[]"
 
     local HOST
     HOST="$(jq -n \
         --argjson contract "$LPOD_CONTRACT" \
         --argjson cores "$(nproc)" \
         --argjson usage "${CPU_USAGE:-0}" \
-        --argjson memory "$(awk '/^MemTotal:/ { total = $2 } /^MemAvailable:/ { available = $2 } END { printf "[%d,%d]", (total - available) * 1024, total * 1024 }' /proc/meminfo)" \
+        --argjson load "$(awk '{ printf "[%s,%s,%s]", $1, $2, $3 }' /proc/loadavg)" \
+        --argjson memory "$(awk '/^MemTotal:/ { total = $2 } /^MemAvailable:/ { available = $2 } /^SwapTotal:/ { swap = $2 } /^SwapFree:/ { swap_free = $2 } END { printf "[%d,%d,%d,%d]", (total - available) * 1024, total * 1024, (swap - swap_free) * 1024, swap * 1024 }' /proc/meminfo)" \
         --arg path "$GRAPH_ROOT" \
         --argjson disk "[$(echo "${DISK:-0 0}" | tr ' ' ',')]" \
         --slurpfile containers <(printf '%s' "[$(echo "$CONTAINERS" | tr ' ' ',')]") \
         --arg timer "$TIMER" \
-        '$containers[0] as $containers | ($timer | split("\n") | map(select(contains("=")) | capture("^(?<key>[^=]+)=(?<value>.*)$")) | from_entries) as $timer
-        | {
+        --arg os "$(os_name)" \
+        --arg kernel "$(uname -r)" \
+        --arg booted "$(awk '/^btime / { print $2 }' /proc/stat)" \
+        --arg storage_driver "$STORAGE_DRIVER" \
+        --arg network_backend "$NETWORK_BACKEND" \
+        --arg quadlet_dir "$(home_path "$(quadlet_unit_path)")" \
+        --arg linger "$(linger_state)" \
+        --slurpfile states <(printf '%s' "${STATES:-[]}") \
+        '$containers[0] as $containers | $states[0] as $states
+        | ($timer | split("\n") | map(select(contains("=")) | capture("^(?<key>[^=]+)=(?<value>.*)$")) | from_entries) as $timer
+        | def nonempty: if . == "" then null else . end;
+        {
             contract: $contract,
-            cpu: {cores: $cores, usage: $usage},
-            memory: {used: $memory[0], total: $memory[1]},
+            cpu: {cores: $cores, usage: $usage, load: $load},
+            memory: {used: $memory[0], total: $memory[1], swap_used: $memory[2], swap_total: $memory[3]},
             disk: {path: $path, used: $disk[0], total: $disk[1]},
             containers: {running: $containers[0], total: $containers[1]},
             auto_update: {
                 enabled: ($timer.ActiveState == "active"),
                 next_run: (($timer.NextElapseUSecRealtime // "") | if . == "" or . == "n/a" then null else (ltrimstr("@") | tonumber | strftime("%Y-%m-%dT%H:%M:%S+00:00")) end)
+            },
+            system: {
+                os: ($os | nonempty),
+                kernel: ($kernel | nonempty),
+                booted_at: ($booted | if . == "" then null else (tonumber | strftime("%Y-%m-%dT%H:%M:%S+00:00")) end),
+                storage_driver: ($storage_driver | nonempty),
+                network_backend: ($network_backend | nonempty),
+                quadlet_dir: $quadlet_dir,
+                linger: (if $linger == "yes" then true elif $linger == "no" then false else null end)
+            },
+            units: {
+                active: ($states | map(select(.ActiveState == "active")) | length),
+                failed: ($states | map(select(.ActiveState == "failed")) | length)
             }
         }')" || return 1
 
@@ -2417,6 +2471,150 @@ if [ $# -eq 0 ] || [ "$1" == "help" ] || [ "$1" == "-h" ] || [ "$1" == "-help" ]
     display_help
 fi
 
+# The drop-ins "lpod settings set" writes for the podman-auto-update timer
+# and service...
+function auto_update_dropin {
+    echo "${SYSTEMD_UNIT_PATH}/podman-auto-update.${1}.d/lpod-${2}.conf"
+}
+
+# "lpod settings --json": the podman-auto-update timer, whether a failed
+# update rolls back, lingering and the Quadlet directory...
+function cmd_settings_show_json {
+    local TIMER
+    TIMER="$("${SYSTEMCTL_CMD[@]}" show podman-auto-update.timer --property=ActiveState,NextElapseUSecRealtime,LastTriggerUSec,TimersCalendar --timestamp=unix 2>/dev/null)"
+
+    local ROLLBACK=true
+
+    if [ -f "$(auto_update_dropin service rollback)" ]; then
+        ROLLBACK=false
+    fi
+
+    jq -n \
+        --argjson contract "$LPOD_CONTRACT" \
+        --arg timer "$TIMER" \
+        --argjson rollback "$ROLLBACK" \
+        --arg linger "$(linger_state)" \
+        --arg quadlet_dir "$(home_path "$(quadlet_unit_path)")" '
+        def iso: if . == null or . == "" or . == "n/a" or . == "0" then null else (ltrimstr("@") | tonumber | strftime("%Y-%m-%dT%H:%M:%S+00:00")) end;
+        ($timer | split("\n") | map(select(contains("=")) | capture("^(?<key>[^=]+)=(?<value>.*)$")) | from_entries) as $timer
+        | {
+            contract: $contract,
+            settings: {
+                auto_update: {
+                    enabled: ($timer.ActiveState == "active"),
+                    schedule: ([($timer.TimersCalendar // "") | capture("OnCalendar=(?<schedule>[^;]+?)\\s*;")] | first | .schedule // "daily"),
+                    rollback: $rollback,
+                    next_run: ($timer.NextElapseUSecRealtime | iso),
+                    last_run: ($timer.LastTriggerUSec | iso)
+                },
+                linger: (if $linger == "yes" then true elif $linger == "no" then false else null end),
+                quadlet_dir: $quadlet_dir
+            }
+        }'
+}
+
+# Whether VALUE is "on" or "off", for the option NAME...
+function valid_switch {
+    if [ "$2" != "on" ] && [ "$2" != "off" ]; then
+        echo "${1} takes on or off." >&2
+
+        return 1
+    fi
+}
+
+# "lpod settings set --json [--auto-update on|off] [--schedule ONCALENDAR]
+# [--rollback on|off] [--linger on|off]": changes only the settings given...
+function cmd_settings_set_json {
+    local AUTO_UPDATE="" SCHEDULE="" ROLLBACK="" LINGER=""
+
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --auto-update) AUTO_UPDATE="${2:-}"; valid_switch "$1" "$AUTO_UPDATE" || return 1; shift ;;
+            --rollback) ROLLBACK="${2:-}"; valid_switch "$1" "$ROLLBACK" || return 1; shift ;;
+            --linger) LINGER="${2:-}"; valid_switch "$1" "$LINGER" || return 1; shift ;;
+            --schedule)
+                SCHEDULE="${2:-}"
+
+                # The schedule goes into a unit file, so it's one line that
+                # systemd itself accepts as an OnCalendar expression...
+                if [ -z "$SCHEDULE" ] || [[ "$SCHEDULE" == -* ]] || [[ "$SCHEDULE" == *$'\n'* ]] || ! systemd-analyze calendar -- "$SCHEDULE" >/dev/null 2>&1; then
+                    echo "--schedule takes a systemd OnCalendar expression, such as daily or \"Mon..Fri 04:00\"." >&2
+
+                    return 1
+                fi
+
+                shift
+                ;;
+            --json) ;;
+            *) echo "Unknown option: $1" >&2; return 1 ;;
+        esac
+
+        shift
+    done
+
+    local RELOAD=false DROPIN
+
+    if [ -n "$SCHEDULE" ]; then
+        DROPIN="$(auto_update_dropin timer schedule)"
+        mkdir -p "$(dirname "$DROPIN")" || return 1
+        printf '[Timer]\nOnCalendar=\nOnCalendar=%s\n' "$SCHEDULE" > "$DROPIN" || return 1
+        RELOAD=true
+    fi
+
+    if [ "$ROLLBACK" == "off" ]; then
+        local PODMAN_PATH
+        PODMAN_PATH="$(command -v "${LPOD_PODMAN_BINARY:-podman}")" || return 1
+
+        DROPIN="$(auto_update_dropin service rollback)"
+        mkdir -p "$(dirname "$DROPIN")" || return 1
+        printf '[Service]\nExecStart=\nExecStart=%s auto-update --rollback=false\n' "$PODMAN_PATH" > "$DROPIN" || return 1
+        RELOAD=true
+    elif [ "$ROLLBACK" == "on" ] && [ -f "$(auto_update_dropin service rollback)" ]; then
+        rm -f "$(auto_update_dropin service rollback)" || return 1
+        RELOAD=true
+    fi
+
+    if [ "$RELOAD" == true ]; then
+        "${SYSTEMCTL_CMD[@]}" daemon-reload || return 1
+    fi
+
+    if [ "$AUTO_UPDATE" == "on" ]; then
+        "${SYSTEMCTL_CMD[@]}" enable --now podman-auto-update.timer >/dev/null 2>&1 || return 1
+
+        # A running timer only picks up a new schedule when it restarts...
+        if [ -n "$SCHEDULE" ]; then
+            "${SYSTEMCTL_CMD[@]}" restart podman-auto-update.timer || return 1
+        fi
+    elif [ "$AUTO_UPDATE" == "off" ]; then
+        "${SYSTEMCTL_CMD[@]}" disable --now podman-auto-update.timer >/dev/null 2>&1 || return 1
+    fi
+
+    # Lingering is a per-user setting, so it doesn't apply as root...
+    if [ -n "$LINGER" ] && [ "$(id -u)" -ne 0 ]; then
+        if [ "$LINGER" == "on" ]; then
+            loginctl enable-linger "$(id -un)" || return 1
+        else
+            loginctl disable-linger "$(id -un)" || return 1
+        fi
+    fi
+
+    json_ok
+}
+
+# "lpod settings [set ...] --json"...
+function cmd_settings_json {
+    require_jq
+
+    if [ "${1:-}" == "set" ]; then
+        shift
+        cmd_settings_set_json "$@"
+
+        return
+    fi
+
+    cmd_settings_show_json
+}
+
 # Quadlet management commands operate on rendered files or installed unit
 # names, not a running service, so they're handled before the SERVICE/COMMAND
 # split below...
@@ -2545,6 +2743,7 @@ if json_requested "$@"; then
         network) shift; cmd_network_json "$@"; exit $? ;;
         journal) shift; cmd_journal_json "$@"; exit $? ;;
         quadlet) shift; cmd_quadlet_json "$@"; exit $? ;;
+        settings) shift; cmd_settings_json "$@"; exit $? ;;
     esac
 fi
 
