@@ -12,7 +12,7 @@ metadata:
 
 `lpod` is a single bash script for managing [Podman Quadlet](https://docs.podman.io/en/latest/markdown/podman-systemd.unit.5.html) services on your machine. It wraps three tools — `podman exec`, `podman quadlet`, and `systemctl` — behind one simple command. Anything it doesn't recognize is passed straight through to `podman`.
 
-It works well with [foxws/laravel-podman](https://github.com/foxws/laravel-podman), a Laravel package whose Artisan `podman:*` commands generate Quadlet files. But you don't need that package to use `lpod` — it works with any Quadlet-managed service.
+It works well with [Pods](https://github.com/foxws/pods), a web UI that manages a host through lpod's `--json` commands. But you don't need Pods to use `lpod` — it works with any Quadlet-managed service.
 
 ## Requirements
 

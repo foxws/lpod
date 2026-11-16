@@ -2,7 +2,7 @@
 
 A single bash script for managing [Podman Quadlet](https://docs.podman.io/en/latest/markdown/podman-systemd.unit.5.html) services on the host. Wraps `podman exec`, `podman quadlet`, and `systemctl`; unrecognized commands pass straight through to `podman`.
 
-Pairs naturally with [foxws/laravel-podman](https://github.com/foxws/laravel-podman), whose Artisan `podman:*` commands render Quadlet files, but `lpod` doesn't require it — point it at any Quadlet-managed service.
+Pairs naturally with [Pods](https://github.com/foxws/pods), a web UI that manages a host through lpod's `--json` commands, but `lpod` doesn't require it — point it at any Quadlet-managed service.
 
 ## Requirements
 
@@ -15,7 +15,7 @@ Pairs naturally with [foxws/laravel-podman](https://github.com/foxws/laravel-pod
 curl -fsSL https://github.com/foxws/lpod/releases/latest/download/install.sh | bash
 ```
 
-Installs `lpod` and `lpod-setup` to `~/.local/bin`, verified against the release's checksums. Upgrade with `lpod self-update`. Dependency-free single script — no PHP or Composer required. See [Installation](docs/installation.md) for pinning a release, installing by hand, and a shell alias.
+Installs `lpod` to `~/.local/bin`, verified against the release's checksums. Upgrade with `lpod self-update`. Dependency-free single script — no PHP or Composer required. See [Installation](docs/installation.md) for pinning a release, installing by hand, and a shell alias.
 
 ## Usage
 
@@ -42,5 +42,5 @@ Full documentation: browse [`docs/`](docs)
 
 ## Links
 
-- [foxws/laravel-podman](https://github.com/foxws/laravel-podman) — the Laravel package `lpod` pairs with
+- [foxws/pods](https://github.com/foxws/pods) — the web UI `lpod` pairs with
 - [Podman Quadlet reference](https://docs.podman.io/en/latest/markdown/podman-systemd.unit.5.html)

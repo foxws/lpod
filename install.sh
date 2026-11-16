@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-# Installs or upgrades lpod and lpod-setup. Run it again, or "lpod
+# Installs or upgrades lpod. Run it again, or "lpod
 # self-update", to upgrade:
 #
 #   curl -fsSL https://github.com/foxws/lpod/releases/latest/download/install.sh | bash
@@ -19,7 +19,7 @@ set -euo pipefail
 
 REPOSITORY="https://github.com/foxws/lpod"
 VERSION="${LPOD_VERSION:-latest}"
-FILES=(lpod lpod-setup)
+FILES=(lpod)
 
 if [ "$(id -u)" -eq 0 ]; then
     INSTALL_DIR="${LPOD_INSTALL_DIR:-/usr/local/bin}"
@@ -156,6 +156,9 @@ function do_install {
         mv "${STAGING}/${NAME}" "${INSTALL_DIR}/${NAME}"
     done
 
+    # lpod-setup rendered laravel-podman presets, and was dropped in v4...
+    rm -f "${INSTALL_DIR}/lpod-setup"
+
     CURRENT="$("${INSTALL_DIR}/lpod" --version)"
 
     if [ -n "$PREVIOUS" ] && [ "$PREVIOUS" != "$CURRENT" ]; then
@@ -169,16 +172,16 @@ function do_install {
         *) warn "${INSTALL_DIR} isn't on your PATH. Add it to your shell profile to run lpod." ;;
     esac
 
-    # The idle check comes with laravel-podman's on-demand socket since v3.
-    # The "lpod-idle@" templates of older releases keep working, as they run
-    # "lpod idle", so they're left in place until the apps move over...
+    # The "lpod-idle@" timers of releases before v3 run "lpod idle", which
+    # v4 no longer has. "lpod APP ondemand enable" writes an app's idle check
+    # now...
     local UNIT
 
     for UNIT in "${SYSTEMD_UNIT_PATH}"/timers.target.wants/lpod-idle@*.timer; do
         [ -e "$UNIT" ] || [ -L "$UNIT" ] || continue
 
-        UNIT="$(basename "$UNIT" .timer)"
-        warn "${UNIT#lpod-idle@} uses the old idle check. Reinstall its socket, then turn the old one off: lpod install ondemand/${UNIT#lpod-idle@}-ondemand.socket --replace && lpod idle disable ${UNIT#lpod-idle@}"
+        UNIT="$(basename "$UNIT")"
+        warn "${UNIT} runs the idle check of lpod before v3, which is gone. Turn it off: ${SYSTEMCTL_CMD[*]} disable --now ${UNIT}"
     done
 
     # Rootless services only start at boot, and keep running after logout, with linger...
@@ -196,8 +199,8 @@ function do_install {
     fi
 }
 
-# Removes lpod, lpod-setup and the idle templates, after disabling every
-# app's idle check. It leaves the apps' own units, secrets and volumes alone...
+# Removes lpod, the lpod-setup of releases before v4 and the idle templates
+# of releases before v3, after disabling every app's old idle check. It leaves the apps' own units, secrets and volumes alone...
 function do_uninstall {
     local UNIT NAME
 
@@ -217,7 +220,7 @@ function do_uninstall {
         "${SYSTEMCTL_CMD[@]}" daemon-reload
     fi
 
-    for NAME in "${FILES[@]}"; do
+    for NAME in "${FILES[@]}" lpod-setup; do
         rm -f "${INSTALL_DIR:?}/${NAME}"
     done
 
