@@ -1,0 +1,50 @@
+{
+    "contract": 1,
+    "events": [
+        {
+            "time": "2026-11-15T10:44:12+00:00",
+            "type": "image",
+            "action": "pull",
+            "name": "codeberg.org/forgejo/forgejo:13",
+            "image": null,
+            "application": null,
+            "exit_code": null
+        },
+        {
+            "time": "2026-11-15T10:42:03+00:00",
+            "type": "container",
+            "action": "start",
+            "name": "immich-server",
+            "image": "ghcr.io/immich-app/immich-server:v2.3.1",
+            "application": "immich",
+            "exit_code": null
+        },
+        {
+            "time": "2026-11-15T09:15:40+00:00",
+            "type": "container",
+            "action": "died",
+            "name": "home-assistant",
+            "image": "ghcr.io/home-assistant/home-assistant:2026.11",
+            "application": "home-assistant",
+            "exit_code": 125
+        },
+        {
+            "time": "2026-11-14T21:03:00+00:00",
+            "type": "container",
+            "action": "stop",
+            "name": "jellyfin",
+            "image": "docker.io/jellyfin/jellyfin:10.11",
+            "application": "jellyfin",
+            "exit_code": null
+        },
+        {
+            "time": "2026-11-14T18:30:11+00:00",
+            "type": "container",
+            "action": "remove",
+            "name": "quirky_lamport",
+            "image": "docker.io/library/alpine:3.22",
+            "application": null,
+            "exit_code": null
+        }
+    ]
+}
