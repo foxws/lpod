@@ -151,6 +151,8 @@ Tools such as Pods manage a host by running these commands over SSH. With `--jso
 | `lpod containers --json` | `containers`: every container, managed by Quadlet or not, with its `state`, `health`, `exit_code`, `application`, `quadlet`, `unit`, `pod`, `ports`, CPU and memory use and `started_at` |
 | `lpod container NAME inspect --json` | `container`: what `containers` prints, plus `created_at`, `memory_limit`, `restart_policy`, `restarts`, `user`, `auto_update`, `digest`, `health_check`, `mounts`, `networks`, `secrets` (where each is exposed, never its value) and `environment` (the Quadlet's `Environment=` lines) |
 | `lpod container NAME logs --json [--lines N]` | `entries`, like `APP logs`. Containers outside Quadlet are read from `podman logs` |
+| `lpod container NAME stats --json` | `stats`: `cpu` (%), `memory` and `memory_limit`, `net_in`, `net_out`, `block_in` and `block_out` (bytes since the container started), `pids` and `sampled_at`. A tool works out rates from two samples |
+| `lpod containers prune --json` | `removed` and `reclaimed` (`null`): removes every stopped container. Quadlet recreates its containers when their units start |
 | `lpod container NAME start\|stop\|restart --json` | `{"ok": true}`. Goes through the container's systemd unit when it has one, without waiting for it |
 | `lpod images --json` | `images`: one per image, with `repository`, `tag`, `size`, `created_at`, the applications that use it (`used_by`), its number of `containers`, `dangling`, `auto_update`, and `update` when the last `auto-update --dry-run` found one |
 | `lpod image pull REF --json`, `lpod image rm ID --json` | `{"ok": true}`. `rm` only takes an image ID |
@@ -161,6 +163,7 @@ Tools such as Pods manage a host by running these commands over SSH. With `--jso
 | `lpod networks --json` | `networks` with their `quadlet`, `driver`, `subnet`, `gateway`, `dns`, `internal`, `ipv6`, number of `containers`, `applications` and whether they're the `default` |
 | `lpod network rm NAME --json`, `lpod networks prune --json` | `{"ok": true}`, or `removed` and `reclaimed` (`null`) for `prune` |
 | `lpod journal --json [--lines N] [--since TIME\|boot] [--priority N]` | `entries`, like `APP logs`, for every unit the installed Quadlets generate and `podman-auto-update.service` |
+| `lpod events --json [--since DURATION] [--limit N]` | `events`, newest first: containers that started, stopped, died (with `exit_code`), restarted or were removed, and images that were pulled or removed, with the `application` of each container. `--since` takes `30m`, `24h` and the like (default `24h`), `--limit` up to 999 (default 50) |
 | `lpod quadlet check --stdin --json` | `valid`, `errors` and the `units` the files generate, from the Quadlet generator's `-dryrun`, next to the installed Quadlets |
 | `lpod quadlet install APP --stdin --json [--replace] [--start]` | `{"ok": true}`. Installs the files as the application `APP` with `podman quadlet install --application`. `--start` starts its units without waiting |
 | `lpod quadlet fetch URL --ref REF --json [--path DIR]` | `commit` and `files` (name and content) of a directory of a Git repository, without installing them. Takes `https://`, `ssh://` and `git@` URLs |
@@ -171,7 +174,7 @@ An application is what `podman quadlet install --application` (or `lpod install`
 
 On failure, the commands print the reason on stderr and exit with an error. Volume sizes are `null` for now, because working them out takes too long for a page load.
 
-`quadlet check` and `quadlet install` read `{"files": [{"name": ..., "content": ...}]}` on stdin. File names are plain Quadlet file names, so nothing is written outside the Quadlet directory. The commands for containers, images, volumes, networks, the journal, Quadlet files and settings only answer with `--json`, so the same words stay free as service names.
+`quadlet check` and `quadlet install` read `{"files": [{"name": ..., "content": ...}]}` on stdin. File names are plain Quadlet file names, so nothing is written outside the Quadlet directory. The commands for containers, images, volumes, networks, the journal, events, Quadlet files and settings only answer with `--json`, so the same words stay free as service names.
 
 The `tests/fixtures/contract-1` folder holds an example payload for each command.
 

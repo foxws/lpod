@@ -1,0 +1,14 @@
+{
+    "contract": 1,
+    "stats": {
+        "cpu": 6.21,
+        "memory": 1395864371,
+        "memory_limit": 4294967296,
+        "net_in": 812345678,
+        "net_out": 104857600,
+        "block_in": 52428800,
+        "block_out": 209715200,
+        "pids": 42,
+        "sampled_at": "2026-11-15T12:04:30+00:00"
+    }
+}

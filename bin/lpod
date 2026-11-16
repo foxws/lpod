@@ -151,7 +151,9 @@ function display_help {
     echo "  ${GREEN}lpod APP redeploy --json${NC}                Pull an application's images and restart it ([--no-block])"
     echo "  ${GREEN}lpod APP remove --json${NC}                  Remove an application ([--volumes] [--images] [--secrets])"
     echo "  ${GREEN}lpod containers --json${NC}                  Every container, managed by Quadlet or not"
-    echo "  ${GREEN}lpod container NAME ACTION --json${NC}       Inspect, show the logs of, start, stop or restart a container"
+    echo "  ${GREEN}lpod containers prune --json${NC}            Remove the stopped containers"
+    echo "  ${GREEN}lpod container NAME ACTION --json${NC}       Inspect, show the logs or stats of, start, stop or restart a container"
+    echo "  ${GREEN}lpod events --json${NC}                      Recent container and image events ([--since 24h] [--limit N])"
     echo "  ${GREEN}lpod images [prune] --json${NC}              Images, or remove the ones no container uses"
     echo "  ${GREEN}lpod image pull REF|rm ID --json${NC}        Pull or remove an image"
     echo "  ${GREEN}lpod auto-update --dry-run --json${NC}       Check the registries for image updates"
@@ -1774,6 +1776,35 @@ function cmd_container_json {
             jq --argjson contract "$LPOD_CONTRACT" '{contract: $contract, entries: .}' <<< "$ENTRIES"
             ;;
 
+        stats)
+            local STATS
+            STATS="$("${LPOD_PODMAN_BINARY:-podman}" stats --no-stream --format '{{json .}}' "$NAME" 2>/dev/null)" || {
+                echo "${NAME} isn't running, so it has no stats." >&2
+
+                return 1
+            }
+
+            # Totals since the container started; a tool works out the rates
+            # from two samples and their sampled_at...
+            jq -s --argjson contract "$LPOD_CONTRACT" --arg now "$(date -u +%Y-%m-%dT%H:%M:%S+00:00)" '
+                first as $s
+                | def network($key; $legacy): if ($s.Network // null) != null then ([$s.Network[] | .[$key] // 0] | add // 0) else ($s[$legacy] // null) end;
+                {
+                    contract: $contract,
+                    stats: {
+                        cpu: ($s.CPU // null),
+                        memory: ($s.MemUsage // null),
+                        memory_limit: ($s.MemLimit // null),
+                        net_in: network("RxBytes"; "NetInput"),
+                        net_out: network("TxBytes"; "NetOutput"),
+                        block_in: ($s.BlockInput // null),
+                        block_out: ($s.BlockOutput // null),
+                        pids: ($s.PIDs // null),
+                        sampled_at: $now
+                    }
+                }' <<< "$STATS"
+            ;;
+
         start|stop|restart)
             # Managed containers go through systemd, so the unit and Quadlet
             # stay in step. Without a unit, Podman acts on the container...
@@ -1787,7 +1818,7 @@ function cmd_container_json {
             ;;
 
         *)
-            echo "Usage: lpod container NAME inspect|logs|start|stop|restart --json" >&2
+            echo "Usage: lpod container NAME inspect|logs|stats|start|stop|restart --json" >&2
 
             return 1
             ;;
@@ -1929,6 +1960,72 @@ function cmd_auto_update_json {
     jq 'if type == "array" then . else [] end' <<< "${RESULT:-[]}" > "$(auto_update_cache)" || return 1
 
     json_ok
+}
+
+# "lpod containers prune --json": removes every stopped container. Quadlet
+# recreates its containers when their units start...
+function cmd_containers_prune_json {
+    require_jq
+
+    "${LPOD_PODMAN_BINARY:-podman}" container prune --force | prune_result_json null
+}
+
+# "lpod events --json [--since DURATION] [--limit N]": what happened to
+# containers and images lately, newest first, with the application each
+# container belongs to...
+function cmd_events_json {
+    require_jq
+
+    local WINDOW="24h" LIMIT=50
+
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --since) WINDOW="${2:-}"; shift ;;
+            --limit) LIMIT="${2:-}"; shift ;;
+            --json) ;;
+            *) echo "Unknown option: $1" >&2; return 1 ;;
+        esac
+
+        shift
+    done
+
+    if ! [[ "$WINDOW" =~ ^[0-9]{1,5}[smh]$ ]]; then
+        echo "--since takes a duration such as 30m or 24h." >&2
+
+        return 1
+    fi
+
+    if ! [[ "$LIMIT" =~ ^[1-9][0-9]{0,2}$ ]]; then
+        echo "--limit takes a number from 1 to 999." >&2
+
+        return 1
+    fi
+
+    local EVENTS UNITS
+    EVENTS="$("${LPOD_PODMAN_BINARY:-podman}" events --stream=false --since "$WINDOW" --filter type=container --filter type=image --format json 2>/dev/null)" || return 1
+    UNITS="$(quadlet_units_json 2>/dev/null)" || UNITS="[]"
+
+    jq -s \
+        --argjson contract "$LPOD_CONTRACT" \
+        --argjson limit "$LIMIT" \
+        --slurpfile units <(printf '%s' "${UNITS:-[]}") '
+        ($units[0] | map({key: .UnitName, value: .app}) | from_entries) as $apps
+        | def iso: if . == null then null else (. / 1000000000 | floor | strftime("%Y-%m-%dT%H:%M:%S+00:00")) end;
+        map(select(
+            (.Type == "container" and (.Status | IN("start", "stop", "died", "remove", "restart")))
+            or (.Type == "image" and (.Status | IN("pull", "remove")))
+        ))
+        | map((.Attributes // {}) as $labels | {
+            time: (.timeNano // null | iso),
+            type: .Type,
+            action: .Status,
+            name: (if .Type == "image" then (.Name // .ID) else .Name end),
+            image: (if .Type == "container" then (.Image // null) else null end),
+            application: ($apps[$labels.PODMAN_SYSTEMD_UNIT // ""] // null),
+            exit_code: (if .Status == "died" then (.ContainerExitCode // null) else null end)
+        })
+        | sort_by(.time) | reverse | .[:$limit]
+        | {contract: $contract, events: .}' <<< "$EVENTS"
 }
 
 # "lpod volumes --json"...
@@ -2723,7 +2820,10 @@ esac
 # the same words stay free as service names for the commands below...
 if json_requested "$@"; then
     case "$1" in
-        containers) shift; cmd_containers_json "$@"; exit $? ;;
+        containers)
+            if [ "${2:-}" == "prune" ]; then cmd_containers_prune_json; else shift; cmd_containers_json "$@"; fi
+            exit $?
+            ;;
         container) shift; cmd_container_json "$@"; exit $? ;;
         images)
             if [ "${2:-}" == "prune" ]; then cmd_images_prune_json; else cmd_images_json; fi
@@ -2744,6 +2844,7 @@ if json_requested "$@"; then
         journal) shift; cmd_journal_json "$@"; exit $? ;;
         quadlet) shift; cmd_quadlet_json "$@"; exit $? ;;
         settings) shift; cmd_settings_json "$@"; exit $? ;;
+        events) shift; cmd_events_json "$@"; exit $? ;;
     esac
 fi
 
