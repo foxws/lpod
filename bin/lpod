@@ -146,7 +146,7 @@ function display_help {
     echo "  ${GREEN}lpod secrets [--json]${NC}                   Secrets, the applications using them, and missing ones"
     echo "  ${GREEN}lpod secret create NAME --stdin${NC}         Create a secret from stdin ([--driver file|pass|shell] [--replace])"
     echo "  ${GREEN}lpod APP status|files|logs --json${NC}       An application's details, Quadlet files or journal ([--lines N] [--since T])"
-    echo "  ${GREEN}lpod APP up|down|restart --json${NC}         Start, stop or restart an application ([--no-block])"
+    echo "  ${GREEN}lpod APP up|down|restart --json${NC}         Start, stop or restart an application ([--no-block]; down --force kills it)"
     echo "  ${GREEN}lpod APP secret add NAME --json${NC}         Give an application a secret (--type env|mount --target TARGET)"
     echo "  ${GREEN}lpod APP redeploy --json${NC}                Pull an application's images and restart it ([--no-block])"
     echo "  ${GREEN}lpod APP remove --json${NC}                  Remove an application ([--volumes] [--images] [--secrets])"
@@ -1403,6 +1403,27 @@ function cmd_app_secret_add {
 
 # The "--json" commands of an application: "lpod APP status|files|logs|up|
 # down|restart|redeploy|secret add ... --json"...
+# Stops the services right away (used by "lpod APP down --force"), for an
+# application stuck starting, in a restart loop or slow to shut down. The
+# stop is queued first, so Restart= doesn't start a killed service again.
+# SIGKILL then ends the processes without waiting for TimeoutStopSec, and
+# systemd still runs the units' ExecStopPost=, which removes the
+# containers. Once they're down, reset-failed clears the failed state and
+# the start limit, so a later "up" isn't refused.
+function app_force_stop {
+    "${SYSTEMCTL_CMD[@]}" --no-block stop "$@" || return 1
+    "${SYSTEMCTL_CMD[@]}" kill --signal=SIGKILL "$@" 2> /dev/null || true
+
+    local TRIES=0
+
+    while [ "$TRIES" -lt 20 ] && "${SYSTEMCTL_CMD[@]}" --quiet is-active "$@" 2> /dev/null; do
+        sleep 0.5
+        TRIES=$((TRIES + 1))
+    done
+
+    "${SYSTEMCTL_CMD[@]}" reset-failed "$@" 2> /dev/null || true
+}
+
 function cmd_app_json {
     require_jq
 
@@ -1471,20 +1492,37 @@ function cmd_app_json {
 
         up|down|restart)
             local NO_BLOCK=()
+            local FORCE=false
             local ARG
 
             for ARG in "$@"; do
-                if [ "$ARG" == "--no-block" ]; then
-                    NO_BLOCK=(--no-block)
-                fi
+                case "$ARG" in
+                    --no-block) NO_BLOCK=(--no-block) ;;
+                    --force) FORCE=true ;;
+                esac
             done
+
+            if [ "$FORCE" == true ] && [ "$COMMAND" != "down" ]; then
+                echo "--force only works with down." >&2
+
+                return 1
+            fi
 
             case "$COMMAND" in
                 up) "${SYSTEMCTL_CMD[@]}" "${NO_BLOCK[@]}" start "$(jq -r '.unit' <<< "$APPLICATION")" || return 1 ;;
                 restart) "${SYSTEMCTL_CMD[@]}" "${NO_BLOCK[@]}" restart "$(jq -r '.unit' <<< "$APPLICATION")" || return 1 ;;
                 # Every service of the application stops, not just the main
                 # one, since siblings don't always stop with it...
-                down) local SERVICES; mapfile -t SERVICES < <(jq -r '.services[]' <<< "$APPLICATION"); "${SYSTEMCTL_CMD[@]}" "${NO_BLOCK[@]}" stop "${SERVICES[@]}" || return 1 ;;
+                down)
+                    local SERVICES
+                    mapfile -t SERVICES < <(jq -r '.services[]' <<< "$APPLICATION")
+
+                    if [ "$FORCE" == true ]; then
+                        app_force_stop "${SERVICES[@]}" || return 1
+                    else
+                        "${SYSTEMCTL_CMD[@]}" "${NO_BLOCK[@]}" stop "${SERVICES[@]}" || return 1
+                    fi
+                    ;;
             esac
 
             json_ok
