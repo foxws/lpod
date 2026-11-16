@@ -1,0 +1,44 @@
+{
+    "contract": 1,
+    "pods": [
+        {
+            "id": "a1b2c3d4e5f6",
+            "name": "immich",
+            "status": "running",
+            "application": "immich",
+            "quadlet": "immich.pod",
+            "unit": "immich-pod.service",
+            "containers": 4,
+            "running": 4,
+            "ports": ["0.0.0.0:2283->2283/tcp"],
+            "networks": ["immich"],
+            "created_at": "2026-11-09T10:41:50+00:00"
+        },
+        {
+            "id": "ffeeddccbbaa",
+            "name": "paperless",
+            "status": "degraded",
+            "application": "paperless",
+            "quadlet": "paperless.kube",
+            "unit": "paperless.service",
+            "containers": 3,
+            "running": 2,
+            "ports": ["0.0.0.0:8000->8000/tcp"],
+            "networks": ["paperless"],
+            "created_at": "2026-11-12T08:00:00+00:00"
+        },
+        {
+            "id": "0123456789ab",
+            "name": "scratch",
+            "status": "exited",
+            "application": null,
+            "quadlet": null,
+            "unit": null,
+            "containers": 1,
+            "running": 0,
+            "ports": [],
+            "networks": ["podman"],
+            "created_at": "2026-11-14T08:00:00+00:00"
+        }
+    ]
+}
