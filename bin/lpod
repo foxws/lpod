@@ -142,6 +142,8 @@ function display_help {
     echo "  ${GREEN}lpod APP secret add NAME --json${NC}         Give an application a secret (--type env|mount --target TARGET)"
     echo "  ${GREEN}lpod APP redeploy --json${NC}                Pull an application's images and restart it ([--no-block])"
     echo "  ${GREEN}lpod APP remove --json${NC}                  Remove an application ([--volumes] [--images] [--secrets])"
+    echo "  ${GREEN}lpod APP ondemand enable --json${NC}         Start an application on its first request, and let it sleep when idle (--port P --app-port P, see the docs)"
+    echo "  ${GREEN}lpod APP ondemand disable|status --json${NC} Run it all the time again, or show its on-demand settings"
     echo "  ${GREEN}lpod containers --json${NC}                  Every container, managed by Quadlet or not"
     echo "  ${GREEN}lpod containers prune --json${NC}            Remove the stopped containers"
     echo "  ${GREEN}lpod pods --json${NC}                        Every pod, with its application, containers and ports"
@@ -1154,6 +1156,641 @@ function cmd_app_secret_add {
 
     json_ok
 }
+# The socket "lpod APP ondemand enable" writes for the application APP. It
+# also holds the settings it was enabled with, on its "# lpod-ondemand:"
+# line, so "status" and "disable" know what was written...
+function ondemand_socket_path {
+    echo "${SYSTEMD_UNIT_PATH}/${1}-ondemand.socket"
+}
+
+# Prints the on-demand settings of the application APP as JSON, or nothing
+# when on-demand is off...
+function ondemand_settings {
+    local SOCKET
+    SOCKET="$(ondemand_socket_path "$1")"
+
+    if [ -f "$SOCKET" ]; then
+        sed -n 's/^# lpod-ondemand: //p' "$SOCKET" | head -n 1
+    fi
+}
+
+# Quotes a word for the command line of a systemd unit, where "%" starts a
+# specifier and "$" a variable...
+function systemd_word {
+    local VALUE="$1"
+
+    VALUE="${VALUE//\\/\\\\}"
+    VALUE="${VALUE//\"/\\\"}"
+    VALUE="${VALUE//%/%%}"
+    VALUE="${VALUE//\$/\$\$}"
+
+    printf '"%s"' "$VALUE"
+}
+
+# Whether VALUE is a TCP port, for the option NAME...
+function valid_port {
+    if ! [[ "$2" =~ ^[1-9][0-9]{0,4}$ ]] || [ "$2" -gt 65535 ]; then
+        echo "${1} takes a port number." >&2
+
+        return 1
+    fi
+}
+
+# Prints the systemd calendar time of a "--schedule-at" time ("*:MM" or
+# "HH:MM", in UTC), and with "early", the one 30 seconds before it...
+function ondemand_calendar {
+    local HOUR="${1%%:*}"
+    local MINUTE="${1##*:}"
+    local SECOND="00"
+
+    if [ "${2:-}" == "early" ]; then
+        SECOND="30"
+        MINUTE=$((10#$MINUTE - 1))
+
+        if [ "$MINUTE" -lt 0 ]; then
+            MINUTE=59
+
+            if [ "$HOUR" != "*" ]; then
+                HOUR=$(((10#$HOUR + 23) % 24))
+            fi
+        fi
+
+        MINUTE="$(printf '%02d' "$MINUTE")"
+
+        if [ "$HOUR" != "*" ]; then
+            HOUR="$(printf '%02d' "$HOUR")"
+        fi
+    fi
+
+    echo "*-*-* ${HOUR}:${MINUTE}:${SECOND} UTC"
+}
+
+# Prints the name and path of the container Quadlet NAME (without the
+# extension) of the application APP, from UNITS (quadlet_units_json)...
+function ondemand_container_unit {
+    jq -r --arg app "$2" --arg name "$3" 'first(.[] | select(.app == $app and .ext == "container" and .base == $name) | [.Name, .Path] | @tsv) // empty' <<< "$1"
+}
+
+# "lpod APP ondemand enable --port PORT --app-port PORT --json [...]": lets
+# a socket start the application on its first request, and its units sleep
+# when it's idle. It writes:
+#
+# - APP-ondemand.socket, listening on PORT, and APP-ondemand.service, a
+#   systemd-socket-proxyd that starts the app, forwards to it and exits
+#   after --idle-timeout without connections;
+# - the drop-in lpod-ondemand.conf for the main unit, which publishes the
+#   app's port only on 127.0.0.1:LOCAL_PORT, keeps it from starting at boot
+#   and lets it stop once the proxy is gone (StopWhenUnneeded=yes);
+# - with --worker, APP-idle.service and APP-idle.timer: every minute, once
+#   the app is asleep, the scheduler isn't running and the --idle-command
+#   (run in --idle-container) succeeds, it stops the workers, so the
+#   services they need can sleep too;
+# - with --schedule, SCHEDULE.timer and a drop-in that turns the scheduler
+#   container into a oneshot started only at the --schedule-at minutes,
+#   with --schedule-env lines (such as the command to run). Each start has
+#   a wake-up 30 seconds before it, so the services it needs are up in
+#   time, and the drop-in then waits for the due minute...
+function cmd_app_ondemand_enable {
+    local APPLICATION="$1"
+    shift
+
+    local PORT="" APP_PORT="" IDLE_TIMEOUT="10min"
+    local IDLE_CONTAINER="" IDLE_USER="" IDLE_COMMAND="" SCHEDULE=""
+    local WORKERS=() SCHEDULE_AT=() SCHEDULE_ENV=()
+
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --port) PORT="${2:-}"; valid_port "$1" "$PORT" || return 1; shift ;;
+            --app-port) APP_PORT="${2:-}"; valid_port "$1" "$APP_PORT" || return 1; shift ;;
+            --idle-timeout) IDLE_TIMEOUT="${2:-}"; shift ;;
+            --worker) WORKERS+=("${2:-}"); shift ;;
+            --idle-container) IDLE_CONTAINER="${2:-}"; shift ;;
+            --idle-user) IDLE_USER="${2:-}"; shift ;;
+            --idle-command) IDLE_COMMAND="${2:-}"; shift ;;
+            --schedule) SCHEDULE="${2:-}"; shift ;;
+            --schedule-at) SCHEDULE_AT+=("${2:-}"); shift ;;
+            --schedule-env) SCHEDULE_ENV+=("${2:-}"); shift ;;
+            --json) ;;
+            *) echo "Unknown option: $1" >&2; return 1 ;;
+        esac
+
+        shift
+    done
+
+    if [ -z "$PORT" ] || [ -z "$APP_PORT" ]; then
+        echo "Pass the port the socket listens on (--port) and the one the app listens on in its container (--app-port)." >&2
+
+        return 1
+    fi
+
+    # The app gets the socket's port + 10000 on 127.0.0.1, where the proxy
+    # forwards to...
+    local LOCAL_PORT=$((PORT + 10000))
+
+    if [ "$LOCAL_PORT" -gt 65535 ]; then
+        echo "--port must be 55535 or lower, since the app gets that port + 10000 on 127.0.0.1." >&2
+
+        return 1
+    fi
+
+    if [ -z "$IDLE_TIMEOUT" ] || [[ "$IDLE_TIMEOUT" =~ [[:space:]] ]] || ! systemd-analyze timespan -- "$IDLE_TIMEOUT" > /dev/null 2>&1; then
+        echo "--idle-timeout takes a systemd time span, such as 10min." >&2
+
+        return 1
+    fi
+
+    if [ ${#WORKERS[@]} -eq 0 ] && { [ -n "$IDLE_CONTAINER" ] || [ -n "$IDLE_COMMAND" ] || [ -n "$IDLE_USER" ]; }; then
+        echo "The idle check stops the workers, so it needs at least one --worker." >&2
+
+        return 1
+    fi
+
+    if { [ -n "$IDLE_CONTAINER" ] && [ -z "$IDLE_COMMAND" ]; } || { [ -z "$IDLE_CONTAINER" ] && [ -n "$IDLE_COMMAND" ]; }; then
+        echo "--idle-container and --idle-command go together." >&2
+
+        return 1
+    fi
+
+    if [ -n "$IDLE_USER" ] && [ -z "$IDLE_CONTAINER" ]; then
+        echo "--idle-user needs --idle-container." >&2
+
+        return 1
+    fi
+
+    if [ -n "$IDLE_USER" ] && ! [[ "$IDLE_USER" =~ ^[A-Za-z0-9_][A-Za-z0-9_.:-]*$ ]]; then
+        echo "Invalid --idle-user: ${IDLE_USER}." >&2
+
+        return 1
+    fi
+
+    if [[ "$IDLE_COMMAND" == *$'\n'* ]]; then
+        echo "--idle-command takes one line." >&2
+
+        return 1
+    fi
+
+    if [ -z "$SCHEDULE" ] && { [ ${#SCHEDULE_AT[@]} -gt 0 ] || [ ${#SCHEDULE_ENV[@]} -gt 0 ]; }; then
+        echo "--schedule-at and --schedule-env need --schedule." >&2
+
+        return 1
+    fi
+
+    if [ -n "$SCHEDULE" ] && [ ${#SCHEDULE_AT[@]} -eq 0 ]; then
+        echo "Pass the minutes the scheduler runs with --schedule-at, such as \"*:00\" (hourly) or 02:00." >&2
+
+        return 1
+    fi
+
+    local TIME
+
+    for TIME in "${SCHEDULE_AT[@]}"; do
+        if ! [[ "$TIME" =~ ^(\*|[01][0-9]|2[0-3]):[0-5][0-9]$ ]]; then
+            echo "--schedule-at takes *:MM or HH:MM, not ${TIME}." >&2
+
+            return 1
+        fi
+    done
+
+    local VARIABLE
+
+    for VARIABLE in "${SCHEDULE_ENV[@]}"; do
+        if ! [[ "$VARIABLE" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]] || [[ "$VARIABLE" == *$'\n'* ]] || [[ "$VARIABLE" == *'$'* ]]; then
+            echo "--schedule-env takes KEY=VALUE on one line, without \$: ${VARIABLE}." >&2
+
+            return 1
+        fi
+    done
+
+    local APP_NAME MAIN_UNIT KIND
+    APP_NAME="$(jq -r '.name' <<< "$APPLICATION")"
+    MAIN_UNIT="$(jq -r '.unit' <<< "$APPLICATION")"
+    KIND="$(jq -r '.kind' <<< "$APPLICATION")"
+
+    if [ "$KIND" == "kube" ]; then
+        echo "On-demand needs a container or pod as the main unit, and ${APP_NAME}'s is a kube." >&2
+
+        return 1
+    fi
+
+    local UNITS MAIN_PATH
+    UNITS="$(quadlet_units_json)" || return 1
+    MAIN_PATH="$(jq -r --arg unit "$MAIN_UNIT" 'first(.[] | select(.UnitName == $unit) | .Path) // empty' <<< "$UNITS")"
+
+    local NAME
+    local WORKER_SERVICES=()
+
+    for NAME in "${WORKERS[@]}" "$IDLE_CONTAINER" "$SCHEDULE"; do
+        if [ -n "$NAME" ] && [ -z "$(ondemand_container_unit "$UNITS" "$APP_NAME" "$NAME")" ]; then
+            echo "${APP_NAME} has no container Quadlet named ${NAME}." >&2
+
+            return 1
+        fi
+    done
+
+    for NAME in "${WORKERS[@]}"; do
+        if [ "${NAME}.service" == "$MAIN_UNIT" ] || [ "$NAME" == "$SCHEDULE" ]; then
+            echo "${NAME} can't be a worker: the socket starts the app, and the timer the scheduler." >&2
+
+            return 1
+        fi
+
+        WORKER_SERVICES+=("${NAME}.service")
+    done
+
+    if [ -n "$SCHEDULE" ] && [ "${SCHEDULE}.service" == "$MAIN_UNIT" ]; then
+        echo "The scheduler can't be the main unit." >&2
+
+        return 1
+    fi
+
+    local SETTINGS
+    SETTINGS="$(jq -cn \
+        --argjson port "$PORT" \
+        --argjson local_port "$LOCAL_PORT" \
+        --argjson app_port "$APP_PORT" \
+        --arg idle_timeout "$IDLE_TIMEOUT" \
+        --arg idle_container "$IDLE_CONTAINER" \
+        --arg idle_user "$IDLE_USER" \
+        --arg idle_command "$IDLE_COMMAND" \
+        --arg schedule "$SCHEDULE" \
+        --args '
+        def list($name): $ARGS.positional | map(select(startswith($name + "=")) | ltrimstr($name + "="));
+        {
+            port: $port,
+            local_port: $local_port,
+            app_port: $app_port,
+            idle_timeout: $idle_timeout,
+            workers: list("worker"),
+            idle_check: (if $idle_container == "" then null else {container: $idle_container, user: (if $idle_user == "" then null else $idle_user end), command: $idle_command} end),
+            schedule: (if $schedule == "" then null else {
+                container: $schedule,
+                at: list("at"),
+                environment: (list("env") | map(capture("^(?<key>[^=]+)=(?<value>.*)$")) | from_entries)
+            } end)
+        }' \
+        "${WORKERS[@]/#/worker=}" "${SCHEDULE_AT[@]/#/at=}" "${SCHEDULE_ENV[@]/#/env=}")" || return 1
+
+    local SYSTEMCTL_LINE="systemctl"
+
+    if [ "$SYSTEMD_SCOPE" == "user" ]; then
+        SYSTEMCTL_LINE="systemctl --user"
+    fi
+
+    local SOCKET="${APP_NAME}-ondemand.socket"
+    local PROXY="${APP_NAME}-ondemand.service"
+    local IDLE_TIMER="${APP_NAME}-idle.timer"
+    local WANTS=()
+
+    if [ ${#WORKERS[@]} -gt 0 ]; then
+        WANTS+=("$IDLE_TIMER")
+    fi
+
+    if [ -n "$SCHEDULE" ]; then
+        WANTS+=("${SCHEDULE}.timer")
+    fi
+
+    local PROXYD
+    PROXYD="$(ondemand_proxyd)" || return 1
+
+    # Enabling again replaces what the last enable wrote, which may name
+    # another scheduler...
+    local PREVIOUS
+    PREVIOUS="$(ondemand_settings "$APP_NAME")"
+
+    if [ -n "$PREVIOUS" ]; then
+        ondemand_remove "$APP_NAME" "$MAIN_UNIT" "$PREVIOUS" "$UNITS"
+    fi
+
+    mkdir -p "$SYSTEMD_UNIT_PATH" || return 1
+
+    {
+        echo "# Written by \"lpod ${APP_NAME} ondemand enable\". See \"On-demand\" in lpod's docs/commands.md."
+        echo "# lpod-ondemand: ${SETTINGS}"
+        echo "[Unit]"
+        echo "Description=${APP_NAME} on-demand socket"
+
+        if [ ${#WANTS[@]} -gt 0 ]; then
+            echo "Wants=${WANTS[*]}"
+        fi
+
+        printf '\n[Socket]\nListenStream=%s\n\n[Install]\nWantedBy=sockets.target\n' "$PORT"
+    } > "${SYSTEMD_UNIT_PATH}/${SOCKET}" || return 1
+
+    {
+        echo "# Written by \"lpod ${APP_NAME} ondemand enable\". See \"On-demand\" in lpod's docs/commands.md."
+        echo "[Unit]"
+        echo "Description=${APP_NAME} on-demand proxy"
+        echo "Requires=${MAIN_UNIT} ${SOCKET}"
+        echo "After=${MAIN_UNIT} ${SOCKET}"
+        echo
+        echo "[Service]"
+        echo "ExecStart=${PROXYD} --exit-idle-time=${IDLE_TIMEOUT} 127.0.0.1:${LOCAL_PORT}"
+    } > "${SYSTEMD_UNIT_PATH}/${PROXY}" || return 1
+
+    local MAIN_DROPIN
+    MAIN_DROPIN="$(dirname "$MAIN_PATH")/$(basename "$MAIN_PATH").d"
+    mkdir -p "$MAIN_DROPIN" || return 1
+
+    {
+        echo "# Written by \"lpod ${APP_NAME} ondemand enable\". See \"On-demand\" in lpod's docs/commands.md."
+        echo "[Unit]"
+        echo "StopWhenUnneeded=yes"
+        echo
+        if [ "$KIND" == "pod" ]; then echo "[Pod]"; else echo "[Container]"; fi
+        echo "PublishPort="
+        echo "PublishPort=127.0.0.1:${LOCAL_PORT}:${APP_PORT}"
+        echo
+        echo "[Install]"
+        echo "WantedBy="
+    } > "${MAIN_DROPIN}/lpod-ondemand.conf" || return 1
+
+    # The idle check: the first conditions skip it while the app is awake or
+    # the scheduler runs, then the idle command must succeed, and the app
+    # must still be asleep, since a request may have woken it meanwhile.
+    # The names and the command are arguments of the fixed scripts, never
+    # part of them...
+    local IDLE_SERVICE="${SYSTEMD_UNIT_PATH}/${APP_NAME}-idle.service"
+    local ASLEEP_SCRIPT="'case \"\$\$(${SYSTEMCTL_LINE} is-active \"\$\$1\")\" in inactive|failed) exit 0;; *) exit 1;; esac' sh ${MAIN_UNIT}"
+
+    if [ ${#WORKERS[@]} -gt 0 ]; then
+        {
+            echo "# Written by \"lpod ${APP_NAME} ondemand enable\". See \"On-demand\" in lpod's docs/commands.md."
+            echo "[Unit]"
+            echo "Description=${APP_NAME} idle check"
+            echo
+            echo "[Service]"
+            echo "Type=oneshot"
+            echo "TimeoutStartSec=50"
+            echo "ExecCondition=${SYSTEMCTL_LINE} --quiet is-active ${SOCKET}"
+            echo "ExecCondition=/bin/sh -c ${ASLEEP_SCRIPT}"
+
+            if [ -n "$SCHEDULE" ]; then
+                echo "ExecCondition=/bin/sh -c '! ${SYSTEMCTL_LINE} --quiet is-active \"\$\$1\" || { echo \"The scheduler is still running.\"; exit 1; }' sh ${SCHEDULE}.service"
+            fi
+
+            if [ -n "$IDLE_CONTAINER" ]; then
+                local PODMAN_PATH CONTAINER_NAME WORD
+                local EXEC_WORDS=()
+                PODMAN_PATH="$(command -v "${LPOD_PODMAN_BINARY:-podman}")" || return 1
+
+                local IDLE_PATH
+                IDLE_PATH="$(ondemand_container_unit "$UNITS" "$APP_NAME" "$IDLE_CONTAINER")"
+                IDLE_PATH="${IDLE_PATH#*$'\t'}"
+                CONTAINER_NAME="$(sed -n 's/^ContainerName=//p' "$IDLE_PATH" | tail -n 1 | sed 's/[[:space:]]*$//')"
+                CONTAINER_NAME="${CONTAINER_NAME:-systemd-${IDLE_CONTAINER}}"
+
+                EXEC_WORDS+=("$(systemd_word "$PODMAN_PATH")" exec)
+
+                if [ -n "$IDLE_USER" ]; then
+                    EXEC_WORDS+=(--user "$(systemd_word "$IDLE_USER")")
+                fi
+
+                EXEC_WORDS+=("$(systemd_word "$CONTAINER_NAME")")
+
+                # The command is split on whitespace, without quotes...
+                local COMMAND_WORDS
+                read -ra COMMAND_WORDS <<< "$IDLE_COMMAND"
+
+                for WORD in "${COMMAND_WORDS[@]}"; do
+                    EXEC_WORDS+=("$(systemd_word "$WORD")")
+                done
+
+                echo "ExecCondition=/bin/sh -c 'unit=\$\$1; shift; ! ${SYSTEMCTL_LINE} --quiet is-active \"\$\$unit\" || \"\$\$@\" || { echo \"${APP_NAME} has work in progress, keeping its workers running.\"; exit 1; }' sh ${IDLE_CONTAINER}.service ${EXEC_WORDS[*]}"
+            fi
+
+            echo "ExecCondition=/bin/sh -c ${ASLEEP_SCRIPT}"
+            echo "ExecStart=${SYSTEMCTL_LINE} stop --no-block ${WORKER_SERVICES[*]}"
+        } > "$IDLE_SERVICE" || return 1
+
+        {
+            echo "# Written by \"lpod ${APP_NAME} ondemand enable\". See \"On-demand\" in lpod's docs/commands.md."
+            echo "[Unit]"
+            echo "Description=${APP_NAME} idle check timer"
+            echo "PartOf=${SOCKET}"
+            echo
+            echo "[Timer]"
+            echo "OnCalendar=*-*-* *:*:10"
+            echo "AccuracySec=15s"
+        } > "${SYSTEMD_UNIT_PATH}/${IDLE_TIMER}" || return 1
+    fi
+
+    if [ -n "$SCHEDULE" ]; then
+        local SCHEDULE_PATH SCHEDULE_DROPIN
+        SCHEDULE_PATH="$(ondemand_container_unit "$UNITS" "$APP_NAME" "$SCHEDULE")"
+        SCHEDULE_PATH="${SCHEDULE_PATH#*$'\t'}"
+        SCHEDULE_DROPIN="$(dirname "$SCHEDULE_PATH")/$(basename "$SCHEDULE_PATH").d"
+
+        # "schedule:run" only runs the tasks due in the minute it starts in,
+        # so the timer fires within a second (AccuracySec=1s), never later,
+        # and runs missed while the host was off aren't made up at boot...
+        {
+            echo "# Written by \"lpod ${APP_NAME} ondemand enable\". See \"On-demand\" in lpod's docs/commands.md."
+            echo "[Unit]"
+            echo "Description=${APP_NAME} schedule timer"
+            echo "PartOf=${SOCKET}"
+            echo
+            echo "[Timer]"
+            echo "Unit=${SCHEDULE}.service"
+
+            for TIME in "${SCHEDULE_AT[@]}"; do
+                echo "OnCalendar=$(ondemand_calendar "$TIME")"
+            done
+
+            for TIME in "${SCHEDULE_AT[@]}"; do
+                echo "OnCalendar=$(ondemand_calendar "$TIME" early)"
+            done
+
+            echo "AccuracySec=1s"
+        } > "${SYSTEMD_UNIT_PATH}/${SCHEDULE}.timer" || return 1
+
+        # The scheduler needs what the app needs (the main unit's Requires=),
+        # since it now runs while the app sleeps...
+        local REQUIRES
+        REQUIRES="$(sed -n 's/^Requires=//p' "$MAIN_PATH" | tr '\n' ' ' | sed 's/[[:space:]]*$//')"
+
+        mkdir -p "$SCHEDULE_DROPIN" || return 1
+
+        {
+            echo "# Written by \"lpod ${APP_NAME} ondemand enable\". See \"On-demand\" in lpod's docs/commands.md."
+
+            if [ -n "$REQUIRES" ]; then
+                echo "[Unit]"
+                echo "Requires=${REQUIRES}"
+                echo "After=${REQUIRES}"
+                echo
+            fi
+
+            if [ ${#SCHEDULE_ENV[@]} -gt 0 ]; then
+                echo "[Container]"
+
+                for VARIABLE in "${SCHEDULE_ENV[@]}"; do
+                    VARIABLE="${VARIABLE//\\/\\\\}"
+                    VARIABLE="${VARIABLE//\"/\\\"}"
+                    VARIABLE="${VARIABLE//%/%%}"
+                    echo "Environment=\"${VARIABLE}\""
+                done
+
+                echo
+            fi
+
+            echo "[Service]"
+            echo "Type=oneshot"
+            echo "Restart=no"
+            echo "ExecStartPre=-/bin/sh -c 'trigger=\$\$(${SYSTEMCTL_LINE} show -P LastTriggerUSec --timestamp=unix \"\$\$1\"); trigger=\$\${trigger#@}; case \"\$\$trigger\" in \"\"|*[!0-9]*) exit 0;; esac; [ \$\$((trigger %% 60)) -ge 30 ] || exit 0; wait=\$\$(( (trigger / 60 + 1) * 60 - \$\$(date +%%s) )); [ \"\$\$wait\" -le 0 ] || exec sleep \"\$\$wait\"' sh ${SCHEDULE}.timer"
+            echo "TimeoutStartSec=300"
+        } > "${SCHEDULE_DROPIN}/lpod-ondemand.conf" || return 1
+    fi
+
+    "${SYSTEMCTL_CMD[@]}" daemon-reload || return 1
+
+    # The running app still listens where it did, so every unit of the
+    # application stops, and the socket starts it again on the first
+    # request. A socket that was already listening only pulls in its timers
+    # again when it restarts...
+    local SERVICES
+    mapfile -t SERVICES < <(jq -r '.services[]' <<< "$APPLICATION")
+
+    "${SYSTEMCTL_CMD[@]}" stop "${SERVICES[@]}" 2> /dev/null
+    "${SYSTEMCTL_CMD[@]}" enable "$SOCKET" > /dev/null 2>&1 || return 1
+    "${SYSTEMCTL_CMD[@]}" start "$SOCKET" || return 1
+
+    if [ ${#WANTS[@]} -gt 0 ]; then
+        "${SYSTEMCTL_CMD[@]}" start "${WANTS[@]}" || return 1
+    fi
+
+    json_ok
+}
+
+# Finds systemd-socket-proxyd, which isn't on the PATH...
+function ondemand_proxyd {
+    local CANDIDATE
+
+    for CANDIDATE in "${LPOD_SOCKET_PROXYD_BINARY:-}" /usr/lib/systemd/systemd-socket-proxyd /lib/systemd/systemd-socket-proxyd /usr/libexec/systemd/systemd-socket-proxyd; do
+        if [ -n "$CANDIDATE" ] && [ -x "$CANDIDATE" ]; then
+            echo "$CANDIDATE"
+
+            return
+        fi
+    done
+
+    echo "systemd-socket-proxyd was not found. Set LPOD_SOCKET_PROXYD_BINARY to its path." >&2
+
+    return 1
+}
+
+# Stops and removes the units and drop-ins "lpod APP ondemand enable" wrote
+# with SETTINGS, without a daemon-reload...
+function ondemand_remove {
+    local APP_NAME="$1"
+    local MAIN_UNIT="$2"
+    local SETTINGS="$3"
+    local UNITS="$4"
+
+    local SCHEDULE
+    SCHEDULE="$(jq -r '.schedule.container // empty' <<< "$SETTINGS")"
+
+    local REMOVE=("${APP_NAME}-ondemand.socket" "${APP_NAME}-ondemand.service" "${APP_NAME}-idle.timer" "${APP_NAME}-idle.service")
+
+    if [ -n "$SCHEDULE" ]; then
+        REMOVE+=("${SCHEDULE}.timer")
+    fi
+
+    "${SYSTEMCTL_CMD[@]}" disable --now "${APP_NAME}-ondemand.socket" > /dev/null 2>&1
+    "${SYSTEMCTL_CMD[@]}" stop "${REMOVE[@]}" 2> /dev/null
+
+    local NAME
+
+    for NAME in "${REMOVE[@]}"; do
+        rm -f "${SYSTEMD_UNIT_PATH:?}/${NAME}"
+    done
+
+    local UNIT_PATH
+
+    while IFS= read -r UNIT_PATH; do
+        rm -f "${UNIT_PATH}.d/lpod-ondemand.conf"
+        rmdir "${UNIT_PATH}.d" 2> /dev/null
+    done < <(jq -r --arg app "$APP_NAME" --arg unit "$MAIN_UNIT" --arg schedule "$SCHEDULE" '.[] | select(.app == $app and (.UnitName == $unit or (.ext == "container" and .base == $schedule))) | .Path' <<< "$UNITS")
+}
+
+# "lpod APP ondemand disable --json": removes what "enable" wrote, and starts
+# the app again, now at boot too...
+function cmd_app_ondemand_disable {
+    local APPLICATION="$1"
+
+    local APP_NAME MAIN_UNIT SETTINGS
+    APP_NAME="$(jq -r '.name' <<< "$APPLICATION")"
+    MAIN_UNIT="$(jq -r '.unit' <<< "$APPLICATION")"
+    SETTINGS="$(ondemand_settings "$APP_NAME")"
+
+    if [ -z "$SETTINGS" ]; then
+        echo "${APP_NAME} isn't on-demand." >&2
+
+        return 1
+    fi
+
+    local UNITS
+    UNITS="$(quadlet_units_json)" || return 1
+
+    ondemand_remove "$APP_NAME" "$MAIN_UNIT" "$SETTINGS" "$UNITS"
+
+    "${SYSTEMCTL_CMD[@]}" daemon-reload || return 1
+    "${SYSTEMCTL_CMD[@]}" reset-failed "$MAIN_UNIT" 2> /dev/null
+    "${SYSTEMCTL_CMD[@]}" --no-block start "$MAIN_UNIT" || return 1
+
+    json_ok
+}
+
+# "lpod APP ondemand status --json": whether the application is on-demand,
+# whether its socket listens, whether the app is awake, and the settings it
+# was enabled with...
+function cmd_app_ondemand_status {
+    local APPLICATION="$1"
+
+    local APP_NAME MAIN_UNIT SETTINGS
+    APP_NAME="$(jq -r '.name' <<< "$APPLICATION")"
+    MAIN_UNIT="$(jq -r '.unit' <<< "$APPLICATION")"
+    SETTINGS="$(ondemand_settings "$APP_NAME")"
+
+    local LISTENING=false AWAKE=false
+
+    if [ -n "$SETTINGS" ] && unit_is_active "${APP_NAME}-ondemand.socket"; then
+        LISTENING=true
+    fi
+
+    if unit_is_active "$MAIN_UNIT"; then
+        AWAKE=true
+    fi
+
+    jq -n \
+        --argjson contract "$LPOD_CONTRACT" \
+        --argjson settings "${SETTINGS:-null}" \
+        --argjson listening "$LISTENING" \
+        --argjson awake "$AWAKE" '
+        {
+            contract: $contract,
+            ondemand: ({enabled: ($settings != null), listening: $listening, awake: $awake}
+                + ($settings // {port: null, local_port: null, app_port: null, idle_timeout: null, workers: [], idle_check: null, schedule: null}))
+        }'
+}
+
+# "lpod APP ondemand enable|disable|status --json"...
+function cmd_app_ondemand {
+    local APPLICATION="$1"
+    local ACTION="${2:-}"
+    shift 2 2> /dev/null || shift
+
+    case "$ACTION" in
+        enable) cmd_app_ondemand_enable "$APPLICATION" "$@" ;;
+        disable) cmd_app_ondemand_disable "$APPLICATION" ;;
+        status) cmd_app_ondemand_status "$APPLICATION" ;;
+        *)
+            echo "Usage: lpod APP ondemand enable|disable|status --json" >&2
+
+            return 1
+            ;;
+    esac
+}
+
 
 # The "--json" commands of an application: "lpod APP status|files|logs|up|
 # down|restart|redeploy|secret add ... --json"...
@@ -1328,6 +1965,10 @@ function cmd_app_json {
 
         remove)
             cmd_app_remove_json "$(jq -r '.name' <<< "$APPLICATION")" "$@"
+            ;;
+
+        ondemand)
+            cmd_app_ondemand "$APPLICATION" "$@"
             ;;
 
         secret)
@@ -2674,7 +3315,7 @@ fi
 # Pods run them over SSH from the home directory...
 if [ $# -ge 2 ] && json_requested "$@"; then
     case "$2" in
-        status|files|logs|up|down|restart|redeploy|remove|secret)
+        status|files|logs|up|down|restart|redeploy|remove|secret|ondemand)
             cmd_app_json "$@"
             exit $?
             ;;
