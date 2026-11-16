@@ -2441,7 +2441,8 @@ function cmd_quadlet_install {
 }
 
 # "lpod quadlet fetch URL --ref REF [--path DIR] --json": prints the files in
-# a directory of a Git repository, without installing them...
+# a directory of a Git repository, without installing them, and the
+# repository's pods.yml manifest...
 function cmd_quadlet_fetch {
     local REPOSITORY="${1:-}"
     shift || true
@@ -2503,10 +2504,21 @@ function cmd_quadlet_fetch {
     local COMMIT
     COMMIT="$(git -C "${WORK}/repository" rev-parse --short HEAD)"
 
+    # The repository's pods.yml, the manifest tools such as Pods read to
+    # offer its sources and ask for its secrets, is returned as text
+    # whichever directory was asked for. A symlink is ignored, so a
+    # repository can't make lpod read a file on the host.
+    local MANIFEST="${WORK}/repository/pods.yml"
+    local MANIFEST_ARGS=(--argjson manifest null)
+
+    if [ -f "$MANIFEST" ] && [ ! -L "$MANIFEST" ] && [ "$(wc -c < "$MANIFEST")" -le 65536 ]; then
+        MANIFEST_ARGS=(--rawfile manifest "$MANIFEST")
+    fi
+
     # shellcheck disable=SC2094
     find "$SOURCE" -maxdepth 1 -type f -size -256k ! -name '.*' | sort | head -n 50 | while IFS= read -r FILE; do
         jq -Rs --arg name "$(basename "$FILE")" '{name: $name, content: .}' < "$FILE"
-    done | jq -s --argjson contract "$LPOD_CONTRACT" --arg commit "$COMMIT" '{contract: $contract, commit: $commit, files: .}'
+    done | jq -s --argjson contract "$LPOD_CONTRACT" --arg commit "$COMMIT" "${MANIFEST_ARGS[@]}" '{contract: $contract, commit: $commit, manifest: $manifest, files: .}'
 }
 
 # "lpod APP remove [--volumes] [--images] [--secrets] --json": stops the
