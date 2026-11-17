@@ -1,0 +1,17 @@
+{
+    "contract": 1,
+    "proxy": { "installed": true, "running": true },
+    "settings": {
+        "managed": true,
+        "mode": "wildcard",
+        "email": "you@example.com",
+        "domain": "home.example.com",
+        "dns_provider": "cloudflare",
+        "resolvers": "1.1.1.1",
+        "image": null,
+        "http_port": 80,
+        "https_port": 443,
+        "dns_token": true
+    },
+    "host": { "scope": "rootless", "unprivileged_port_start": 80 }
+}
