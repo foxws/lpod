@@ -147,7 +147,7 @@ function display_help {
     echo "  ${GREEN}lpod containers --json${NC}                  Every container, managed by Quadlet or not"
     echo "  ${GREEN}lpod containers prune --json${NC}            Remove the stopped containers"
     echo "  ${GREEN}lpod pods --json${NC}                        Every pod, with its application, containers and ports"
-    echo "  ${GREEN}lpod container NAME ACTION --json${NC}       Inspect, show the logs or stats of, start, stop or restart a container"
+    echo "  ${GREEN}lpod container NAME ACTION --json${NC}       Inspect, show the logs or stats of, run a command in, start, stop or restart a container"
     echo "  ${GREEN}lpod events --json${NC}                      Recent container and image events ([--since 24h] [--limit N])"
     echo "  ${GREEN}lpod images [prune] --json${NC}              Images, or remove the ones no container uses"
     echo "  ${GREEN}lpod image pull REF|rm ID --json${NC}        Pull or remove an image"
@@ -2114,7 +2114,7 @@ function cmd_containers_json {
     jq --argjson contract "$LPOD_CONTRACT" '{contract: $contract, containers: .}' <<< "$CONTAINERS"
 }
 
-# "lpod container NAME inspect|logs|start|stop|restart --json"...
+# "lpod container NAME inspect|logs|stats|exec|start|stop|restart --json"...
 function cmd_container_json {
     require_jq
 
@@ -2271,8 +2271,66 @@ function cmd_container_json {
             json_ok
             ;;
 
+        exec)
+            local STDIN=false
+            local EXEC_ARGS=()
+
+            while [ $# -gt 0 ]; do
+                case "$1" in
+                    --stdin) STDIN=true ;;
+                    --user) EXEC_ARGS+=(--user "${2:-}"); shift ;;
+                    --workdir) EXEC_ARGS+=(--workdir "${2:-}"); shift ;;
+                    --json) ;;
+                    --) shift; break ;;
+                    *) echo "Unknown option: $1" >&2; return 1 ;;
+                esac
+
+                shift
+            done
+
+            if [ $# -eq 0 ]; then
+                echo "Usage: lpod container NAME exec [--stdin] [--user USER] [--workdir DIR] --json -- COMMAND [ARG...]" >&2
+
+                return 1
+            fi
+
+            if [ "$(jq -r '.state' <<< "$SUMMARY")" != "running" ]; then
+                echo "${NAME} isn't running, so nothing can run in it." >&2
+
+                return 1
+            fi
+
+            local OUT ERR CODE=0
+            OUT="$(mktemp)" && ERR="$(mktemp)" || return 1
+
+            # Without --stdin, the command reads nothing, so it never waits on
+            # the SSH session's input...
+            if [ "$STDIN" == true ]; then
+                "${LPOD_PODMAN_BINARY:-podman}" exec --interactive "${EXEC_ARGS[@]}" "$NAME" "$@" > "$OUT" 2> "$ERR" || CODE=$?
+            else
+                "${LPOD_PODMAN_BINARY:-podman}" exec "${EXEC_ARGS[@]}" "$NAME" "$@" > "$OUT" 2> "$ERR" < /dev/null || CODE=$?
+            fi
+
+            # 125 is Podman's own error, such as an unknown user, not the command's...
+            if [ "$CODE" -eq 125 ]; then
+                cat "$ERR" >&2
+                rm -f "$OUT" "$ERR"
+
+                return 1
+            fi
+
+            jq -n \
+                --argjson contract "$LPOD_CONTRACT" \
+                --argjson code "$CODE" \
+                --rawfile stdout <(tail -c 65536 "$OUT") \
+                --rawfile stderr <(tail -c 65536 "$ERR") \
+                '{contract: $contract, exit_code: $code, stdout: $stdout, stderr: $stderr}'
+
+            rm -f "$OUT" "$ERR"
+            ;;
+
         *)
-            echo "Usage: lpod container NAME inspect|logs|stats|start|stop|restart --json" >&2
+            echo "Usage: lpod container NAME inspect|logs|stats|exec|start|stop|restart --json" >&2
 
             return 1
             ;;
