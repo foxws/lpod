@@ -105,24 +105,39 @@ For an `env` secret, leaving the value blank (just pressing Enter) skips it and 
 
 ## Routes
 
-The Pods proxy (`pods-proxy`, a Caddy Quadlet; see Pods' README) sends hostnames to the containers of the applications on the host. lpod keeps each application's routes and writes what the proxy needs:
+The Pods proxy (`pods-proxy`, a Caddy Quadlet; see Pods' README) sends hostnames to the containers of the applications on the host. lpod keeps each application's routes and writes what the proxy needs. How it writes them depends on the proxy's Caddyfile (`~/.config/pods-proxy/Caddyfile`):
 
-| File | Role |
-| --- | --- |
-| `~/.config/pods-proxy/sites/APP.Caddyfile` | One site per route, `{$PROXY_SCHEME:https}://HOST` with `reverse_proxy TARGET` (and compression on the main route). Its `# lpod-routes:` line holds the routes as given |
-| `pods-proxy.container.d/lpod-routes-APP.conf` | `Network=` for each `.network` Quadlet of the application, so the proxy reaches its containers by name |
+| Layout | When | Routes file |
+| --- | --- | --- |
+| `sites` | The default | `sites/APP.Caddyfile`: a site per route, `{$PROXY_SCHEME:https}://HOST`, each getting its own certificate |
+| `handlers` | The Caddyfile has `import sites/*.caddy` inside a wildcard site (`*.home.example.com { … }`), with one certificate through a DNS challenge | `sites/APP.caddy`: a matcher and a `handle` per route, inside that site |
+
+```caddy
+# sites/stry.caddy in the handlers layout
+@stry host stry.home.example.com stry-ws.home.example.com
+handle @stry {
+	reverse_proxy host.containers.internal:8000 {
+		stream_close_delay 5m
+	}
+}
+```
+
+The routes file's `# lpod-routes:` line holds the routes as given. `pods-proxy.container.d/lpod-routes-APP.conf` has a `Network=` for each `.network` Quadlet of the application, so the proxy reaches its containers by name.
 
 ```bash
 echo '{"routes": [
     {"role": "app", "host": "stry.home.arpa", "upstream": "systemd-stry:8000"},
-    {"role": "websockets", "host": "ws.stry.home.arpa", "upstream": "systemd-stry-reverb:6001"}
+    {"role": "ws", "host": "stry-ws.home.arpa", "upstream": "systemd-stry-reverb:6001", "via": "main"},
+    {"role": "mail", "host": "stry-mail.home.arpa", "upstream": "systemd-stry-mailpit:8025"}
 ]}' | lpod stry routes set --stdin --json
 ```
 
-- A `role` names the route (`app`, `websockets`), a `host` is a hostname, and an `upstream` is a container and port. Hosts and roles are unique, and hosts are kept in lowercase.
-- The first route is the main one unless another says `"main": true`. While the application is on demand, its main route goes to its socket (`host.containers.internal:PORT`), so a request wakes it. `ondemand enable` and `disable` rewrite it. The other routes go to their containers, and get a 502 while the application sleeps. The socket must listen on an address the proxy container reaches, so not `--listen 127.0.0.1`.
-- When the networks the proxy joins change, lpod reloads systemd and restarts the proxy. Otherwise it reloads Caddy (`caddy reload` in `systemd-pods-proxy`), which keeps open connections up. A proxy that isn't running picks the routes up when it starts.
-- `PROXY_SCHEME` is `https` unless the proxy's environment says otherwise, such as `http` behind another proxy that handles HTTPS.
+- A `role` names the route (`app`, `ws`), a `host` is a hostname, and an `upstream` is a container and port. Hosts and roles are unique, and hosts are kept in lowercase. In the `handlers` layout, a host must be one label under the wildcard domain (`stry-ws.home.example.com`, not `ws.stry.home.example.com`), since that's all the certificate covers.
+- The first route is the main one unless another says `"main": true`. While the application is on demand, its main route goes to its socket (`host.containers.internal:PORT`), so a request wakes it. `ondemand enable` and `disable` rewrite it. The socket must listen on an address the proxy container reaches, so not `--listen 127.0.0.1`.
+- A route with `"via": "main"` goes where the main route goes, and shares its site or matcher, for applications that route their own hostnames (such as stry, whose own Caddy forwards to Reverb and RustFS). Such routes wake a sleeping application too. The others go to their containers, and get a 502 while the application sleeps.
+- Every `reverse_proxy` keeps WebSocket connections open for 5 minutes after a reload (`stream_close_delay 5m`), since lpod reloads Caddy whenever routes change.
+- When the networks the proxy joins change, lpod reloads systemd and restarts the proxy. Otherwise it reloads Caddy (`caddy reload` in `systemd-pods-proxy`, through the admin socket when the Caddyfile says `admin unix//…`), which keeps open connections up. A proxy that isn't running picks the routes up when it starts.
+- `PROXY_SCHEME` is `https` unless the proxy's environment says otherwise, such as `http` behind another proxy that handles HTTPS. The `handlers` layout uses the wildcard site's scheme.
 
 ## On-demand
 
@@ -186,9 +201,9 @@ Tools such as Pods manage a host by running these commands over SSH. With `--jso
 | `lpod APP secret add NAME --type env\|mount --target TARGET --json` | `{"ok": true}`. Writes the drop-in `lpod-secret-NAME.conf` for the application's main container, next to its Quadlet |
 | `lpod APP ondemand enable --json --port PORT --app-port PORT [...]` | `{"ok": true}`. Lets a socket start the application on its first request, and its units sleep when idle. See [On-demand](#on-demand) for the options |
 | `lpod APP routes --json` | `routes`: the application's routes (see [Routes](#routes)), each with its `role`, `host`, `upstream`, whether it's the `main` one, and its `target`: the upstream, or the on-demand socket for the main route of an on-demand application |
-| `lpod APP routes set --stdin --json` | `{"ok": true}`. Replaces the application's routes with `{"routes": [{"role", "host", "upstream", "main"}]}` on stdin, and applies them. An empty list removes them |
+| `lpod APP routes set --stdin --json` | `{"ok": true}`. Replaces the application's routes with `{"routes": [{"role", "host", "upstream", "main", "via"}]}` on stdin, and applies them. An empty list removes them |
 | `lpod APP routes remove --json` | `{"ok": true}`. Removes the application's routes |
-| `lpod proxy routes --json` | `proxy` (`installed` and `running`) and `routes`: every application's routes, each with its `application` |
+| `lpod proxy routes --json` | `proxy` (`installed`, `running`, the `layout` of its Caddyfile, `sites` or `handlers`, and the wildcard `domain` in the `handlers` layout) and `routes`: every application's routes, each with its `application` |
 | `lpod APP ondemand disable --json` | `{"ok": true}`. Removes what `enable` wrote, and starts the application again |
 | `lpod APP ondemand status --json` | `ondemand`: whether it's `enabled`, whether the socket is `listening`, whether the app is `awake` (its main unit runs), and the settings it was enabled with: `port`, `local_port`, `app_port`, `listen` (`null` for every address), `idle_timeout`, `workers`, `idle_check` (`container`, `user` and `command`, or `null`) and `schedule` (`container`, `at` and `environment`, or `null`). They're `null` (`workers` empty) when it's off |
 | `lpod secret rm NAME [--json]` | `{"ok": true}` |

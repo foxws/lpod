@@ -1915,44 +1915,118 @@ function proxy_sites_path {
     echo "${HOME}/.config/pods-proxy/sites"
 }
 
+function proxy_caddyfile_path {
+    echo "${HOME}/.config/pods-proxy/Caddyfile"
+}
+
 function proxy_dropin_path {
     echo "$(quadlet_unit_path)/pods-proxy.container.d"
 }
 
-# The routes "APP routes set" stored, as JSON, or nothing...
+# How the proxy's Caddyfile takes routes: "handlers" when it imports
+# sites/*.caddy inside a wildcard site (*.home.example.com, with a
+# certificate through a DNS challenge), or else "sites", a site per hostname
+# from sites/*.Caddyfile...
+function proxy_layout {
+    if grep -qE '^[[:space:]]*import[[:space:]]+sites/\*\.caddy([[:space:]]|$)' "$(proxy_caddyfile_path)" 2> /dev/null; then
+        echo handlers
+    else
+        echo sites
+    fi
+}
+
+# The domain of the proxy's wildcard site (home.example.com for
+# "*.home.example.com {"), in the handlers layout...
+function proxy_wildcard_domain {
+    sed -nE 's/^[[:space:]]*\*\.([A-Za-z0-9.-]+)([[:space:]]*,[^{]*)?[[:space:]]*\{[[:space:]]*$/\1/p' "$(proxy_caddyfile_path)" 2> /dev/null | head -n 1 | tr '[:upper:]' '[:lower:]'
+}
+
+# The admin address of the proxy's Caddy when it's a unix socket
+# ("admin unix//config/admin.sock|0600" gives unix//config/admin.sock), so
+# a reload goes through it...
+function proxy_admin_address {
+    sed -nE 's/^[[:space:]]*admin[[:space:]]+(unix\/[^[:space:]|]+).*/\1/p' "$(proxy_caddyfile_path)" 2> /dev/null | head -n 1
+}
+
+# The file an application's routes are written to in the current layout...
+function routes_site_path {
+    if [ "$(proxy_layout)" == "handlers" ]; then
+        echo "$(proxy_sites_path)/${1}.caddy"
+    else
+        echo "$(proxy_sites_path)/${1}.Caddyfile"
+    fi
+}
+
+# The routes "APP routes set" stored, as JSON, or nothing. They're read from
+# either layout's file, so switching layouts keeps them...
 function routes_settings {
     local SITE
-    SITE="$(proxy_sites_path)/${1}.Caddyfile"
 
-    if [ -f "$SITE" ]; then
-        sed -n 's/^# lpod-routes: //p' "$SITE" | head -n 1
-    fi
+    for SITE in "$(proxy_sites_path)/${1}.caddy" "$(proxy_sites_path)/${1}.Caddyfile"; do
+        if [ -f "$SITE" ] && grep -q '^# lpod-routes: ' "$SITE"; then
+            sed -n 's/^# lpod-routes: //p' "$SITE" | head -n 1
+
+            return
+        fi
+    done
 }
 
 # The routes of APP_NAME with the upstream each one really goes to: the main
 # route of an on-demand application goes to its socket on the host, so a
-# request wakes it...
+# request wakes it, and a route "via": "main" goes where the main route goes...
 function routes_with_targets {
     local APP_NAME="$1" ROUTES="$2"
     local ONDEMAND
     ONDEMAND="$(ondemand_settings "$APP_NAME")"
 
     jq --argjson ondemand "${ONDEMAND:-null}" '
-        map(. + {target: (if .main and $ondemand != null then "host.containers.internal:\($ondemand.port)" else .upstream end)})
+        (first(.[] | select(.main)) // null) as $main
+        | (if $main == null then null elif $ondemand != null then "host.containers.internal:\($ondemand.port)" else $main.upstream end) as $main_target
+        | map(. + {via: (.via // null)})
+        | map(. + {target: (if .main or .via == "main" then $main_target else .upstream end)})
     ' <<< "$ROUTES"
 }
 
-# Writes the Caddyfile and the network drop-in of an application's stored
+# Prints the Caddy config of an application's routes: the main route and the
+# routes "via" it share one matcher or site, and each other route gets its
+# own. Every reverse_proxy keeps WebSockets open for 5 minutes after a
+# reload, since lpod reloads Caddy whenever routes change...
+function routes_caddy {
+    local APP_NAME="$1" LAYOUT="$2" ROUTES="$3"
+
+    routes_with_targets "$APP_NAME" "$ROUTES" | jq -r --arg app "$APP_NAME" --arg layout "$LAYOUT" '
+        def proxy($target): "\treverse_proxy \($target) {\n\t\tstream_close_delay 5m\n\t}\n";
+        ([.[] | select(.main or .via == "main")]) as $grouped
+        | ([.[] | select((.main or .via == "main") | not)]) as $rest
+        | ([if ($grouped | length) > 0 then {name: $app, hosts: [$grouped[].host], target: $grouped[0].target, main: true} else empty end]
+            + [$rest[] | {name: "\($app)-\(.role)", hosts: [.host], target, main: false}]) as $blocks
+        | $blocks[]
+        | if $layout == "handlers" then
+            "\n@\(.name) host \(.hosts | join(" "))\nhandle @\(.name) {\n" + proxy(.target) + "}"
+          else
+            "\n" + (.hosts | map("{$PROXY_SCHEME:https}://\(.)") | join(", ")) + " {\n" + (if .main then "\tencode zstd gzip\n" else "" end) + proxy(.target) + "}"
+          end
+    '
+}
+
+# Reloads the proxy's Caddy, through its admin socket when it has one...
+function proxy_reload {
+    local ADDRESS
+    ADDRESS="$(proxy_admin_address)"
+
+    "${LPOD_PODMAN_BINARY:-podman}" exec systemd-pods-proxy caddy reload --config /etc/caddy/Caddyfile ${ADDRESS:+--address "$ADDRESS"} > /dev/null
+}
+
+# Writes the routes file and the network drop-in of an application's stored
 # routes (or removes both when it has none), then applies them: a restart of
 # the proxy when the networks it joins changed, or else a reload of Caddy,
 # which keeps open connections up. A proxy that isn't running picks them up
 # when it starts...
 function routes_apply {
     local APP_NAME="$1"
-    local SITES DROPINS SITE DROPIN ROUTES
-    SITES="$(proxy_sites_path)"
+    local DROPINS SITE DROPIN ROUTES
     DROPINS="$(proxy_dropin_path)"
-    SITE="${SITES}/${APP_NAME}.Caddyfile"
+    SITE="$(routes_site_path "$APP_NAME")"
     DROPIN="${DROPINS}/lpod-routes-${APP_NAME}.conf"
     ROUTES="$(routes_settings "$APP_NAME")"
 
@@ -1962,15 +2036,17 @@ function routes_apply {
         BEFORE="$(cat "$DROPIN")"
     fi
 
+    rm -f "$(proxy_sites_path)/${APP_NAME}.caddy" "$(proxy_sites_path)/${APP_NAME}.Caddyfile"
+
     if [ -z "$ROUTES" ] || [ "$(jq 'length' <<< "$ROUTES")" -eq 0 ]; then
-        rm -f "$SITE" "$DROPIN"
+        rm -f "$DROPIN"
     else
-        mkdir -p "$SITES" "$DROPINS" || return 1
+        mkdir -p "$(proxy_sites_path)" "$DROPINS" || return 1
 
         {
             echo "# Written by \"lpod ${APP_NAME} routes set\". See \"Routes\" in lpod's docs/commands.md."
             echo "# lpod-routes: $(jq -c . <<< "$ROUTES")"
-            routes_with_targets "$APP_NAME" "$ROUTES" | jq -r '.[] | "\n{$PROXY_SCHEME:https}://\(.host) {\n" + (if .main then "\tencode zstd gzip\n" else "" end) + "\treverse_proxy \(.target)\n}"'
+            routes_caddy "$APP_NAME" "$(proxy_layout)" "$ROUTES"
         } > "$SITE" || return 1
 
         local NETWORKS
@@ -2004,7 +2080,7 @@ function routes_apply {
     fi
 
     if unit_is_active pods-proxy.service; then
-        "${LPOD_PODMAN_BINARY:-podman}" exec systemd-pods-proxy caddy reload --config /etc/caddy/Caddyfile > /dev/null || return 1
+        proxy_reload || return 1
     fi
 }
 
@@ -2051,7 +2127,13 @@ function cmd_app_routes {
                 return 1
             fi
 
-            PROBLEM="$(jq -r '
+            local DOMAIN=""
+
+            if [ "$(proxy_layout)" == "handlers" ]; then
+                DOMAIN="$(proxy_wildcard_domain)"
+            fi
+
+            PROBLEM="$(jq -r --arg domain "$DOMAIN" '
                 def hostname: test("^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?(\\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*$") and (length <= 253);
                 if type != "array" then "routes must be a list."
                 elif length > 50 then "At most 50 routes."
@@ -2065,6 +2147,9 @@ function cmd_app_routes {
                     if ([.[].host | ascii_downcase] | length) != ([.[].host | ascii_downcase] | unique | length) then "Each host can only have one route."
                     elif ([.[].role] | length) != ([.[].role] | unique | length) then "Each role can only have one route."
                     elif ([.[] | select(.main == true)] | length) > 1 then "Only one route can be the main one."
+                    elif any(.[]; (.via // null) != null and .via != "main") then "A route can only go via the main one: \"via\": \"main\"."
+                    elif any(.[]; .main == true and .via == "main") then "The main route cannot go via itself."
+                    elif $domain != "" then (first(.[] | select((.host | ascii_downcase) as $host | ($host | endswith("." + $domain)) and ($host | rtrimstr("." + $domain) | test("^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$")) | not)) | "\(.host) is not one label under *.\($domain), which the certificate of the proxy covers.") // empty
                     else empty end
                 ) end
             ' <<< "$ROUTES")" || return 1
@@ -2078,17 +2163,18 @@ function cmd_app_routes {
             ROUTES="$(jq -c '
                 (any(.[]; .main == true)) as $chosen
                 | to_entries | map(.value + {host: (.value.host | ascii_downcase), main: (if $chosen then .value.main == true else .key == 0 end)})
-                | map({role, host, upstream, main})
+                | map(if .main then . + {via: null} else . end)
+                | map({role, host, upstream, main} + (if (.via // null) == "main" then {via: "main"} else {} end))
             ' <<< "$ROUTES")"
 
             mkdir -p "$(proxy_sites_path)" || return 1
-            printf '# lpod-routes: %s\n' "$ROUTES" > "$(proxy_sites_path)/${APP_NAME}.Caddyfile" || return 1
+            printf '# lpod-routes: %s\n' "$ROUTES" > "$(routes_site_path "$APP_NAME")" || return 1
             routes_apply "$APP_NAME" || return 1
             json_ok
             ;;
 
         remove)
-            rm -f "$(proxy_sites_path)/${APP_NAME}.Caddyfile"
+            rm -f "$(proxy_sites_path)/${APP_NAME}.caddy" "$(proxy_sites_path)/${APP_NAME}.Caddyfile"
             routes_apply "$APP_NAME" || return 1
             json_ok
             ;;
@@ -2122,18 +2208,25 @@ function cmd_proxy_json {
         RUNNING=true
     fi
 
-    local SITE APP_NAME ROUTES ALL=()
+    local SITE APP_NAME ROUTES ALL=() SEEN=()
 
-    for SITE in "$(proxy_sites_path)"/*.Caddyfile; do
+    for SITE in "$(proxy_sites_path)"/*.caddy "$(proxy_sites_path)"/*.Caddyfile; do
         [ -f "$SITE" ] || continue
-        APP_NAME="$(basename "$SITE" .Caddyfile)"
+        APP_NAME="$(basename "$SITE")"
+        APP_NAME="${APP_NAME%.*}"
+
+        # An application has one routes file, but skip it if both layouts' are there...
+        [[ " ${SEEN[*]} " == *" ${APP_NAME} "* ]] && continue
+        SEEN+=("$APP_NAME")
+
         ROUTES="$(routes_settings "$APP_NAME")"
         [ -n "$ROUTES" ] || continue
         ALL+=("$(routes_with_targets "$APP_NAME" "$ROUTES" | jq -c --arg app "$APP_NAME" 'map({application: $app} + .)')")
     done
 
     printf '%s\n' "${ALL[@]}" | jq -s --argjson contract "$LPOD_CONTRACT" --argjson installed "$INSTALLED" --argjson running "$RUNNING" \
-        '{contract: $contract, proxy: {installed: $installed, running: $running}, routes: (add // [])}'
+        --arg layout "$(proxy_layout)" --arg domain "$(proxy_wildcard_domain)" \
+        '{contract: $contract, proxy: {installed: $installed, running: $running, layout: $layout, domain: (if $layout == "handlers" and $domain != "" then $domain else null end)}, routes: (add // [])}'
 }
 
 # "lpod APP ondemand enable|disable|status --json"...
