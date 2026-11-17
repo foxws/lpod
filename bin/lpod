@@ -1814,6 +1814,87 @@ function app_start_main {
     "${SYSTEMCTL_CMD[@]}" "$@" "$ACTION" "$MAIN_UNIT"
 }
 
+# "lpod APP files remove NAME... --json": removes some of an application's
+# files, named as "APP files" names them: a Quadlet (whose unit stops) or a
+# drop-in next to one. Every name must be one of the application's files, or
+# nothing is removed, and lpod's own drop-ins (lpod-*.conf) are left to the
+# commands that wrote them...
+function app_files_remove {
+    local APP_NAME="$1"
+    shift
+
+    local NAMES=() ARG
+
+    for ARG in "$@"; do
+        case "$ARG" in
+            --json) ;;
+            -*) echo "Unknown option: $ARG" >&2; return 1 ;;
+            *) NAMES+=("$ARG") ;;
+        esac
+    done
+
+    if [ ${#NAMES[@]} -eq 0 ]; then
+        echo "Usage: lpod APP files remove NAME... --json" >&2
+
+        return 1
+    fi
+
+    local UNITS
+    UNITS="$(quadlet_units_json)" || return 1
+
+    local QUADLETS=() DROPINS=() NAME QUADLET_PATH
+
+    for NAME in "${NAMES[@]}"; do
+        if [[ "$NAME" == */* ]]; then
+            local QUADLET="${NAME%%.d/*}" DROPIN="${NAME#*.d/}"
+
+            if [[ "$NAME" != "${QUADLET}.d/${DROPIN}" ]] || ! [[ "$DROPIN" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]*\.conf$ ]]; then
+                echo "${NAME} isn't a file of ${APP_NAME}." >&2
+
+                return 1
+            fi
+
+            if [[ "$DROPIN" == lpod-* ]]; then
+                echo "${NAME} was written by lpod, so lpod's own command removes it." >&2
+
+                return 1
+            fi
+
+            QUADLET_PATH="$(jq -r --arg app "$APP_NAME" --arg name "$QUADLET" 'first(.[] | select(.app == $app and .Name == $name) | .Path) // empty' <<< "$UNITS")"
+            local DROPIN_PATH
+            DROPIN_PATH="$(dirname "$QUADLET_PATH")/${QUADLET}.d/${DROPIN}"
+
+            if [ -z "$QUADLET_PATH" ] || [ ! -f "$DROPIN_PATH" ] || [ -L "$DROPIN_PATH" ]; then
+                echo "${NAME} isn't a file of ${APP_NAME}." >&2
+
+                return 1
+            fi
+
+            DROPINS+=("$DROPIN_PATH")
+        else
+            if ! jq -e --arg app "$APP_NAME" --arg name "$NAME" 'any(.[]; .app == $app and .Name == $name)' <<< "$UNITS" > /dev/null; then
+                echo "${NAME} isn't a file of ${APP_NAME}." >&2
+
+                return 1
+            fi
+
+            QUADLETS+=("$NAME")
+        fi
+    done
+
+    if [ ${#DROPINS[@]} -gt 0 ]; then
+        rm -f -- "${DROPINS[@]}" || return 1
+    fi
+
+    if [ ${#QUADLETS[@]} -gt 0 ]; then
+        "${LPOD_PODMAN_BINARY:-podman}" quadlet rm --force "${QUADLETS[@]}" > /dev/null || return 1
+    fi
+
+    "${SYSTEMCTL_CMD[@]}" daemon-reload || return 1
+
+    printf '%s\n' "${NAMES[@]}" | jq -R . | jq -s --argjson contract "$LPOD_CONTRACT" '{contract: $contract, removed: .}'
+}
+
 # "lpod APP ondemand enable|disable|status --json"...
 function cmd_app_ondemand {
     local APPLICATION="$1"
@@ -1872,6 +1953,13 @@ function cmd_app_json {
             ;;
 
         files)
+            if [ "${1:-}" == "remove" ]; then
+                shift
+                app_files_remove "$(jq -r '.name' <<< "$APPLICATION")" "$@"
+
+                return
+            fi
+
             local UNITS
             UNITS="$(quadlet_units_json)" || return 1
 
