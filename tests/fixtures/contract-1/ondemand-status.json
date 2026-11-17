@@ -9,9 +9,7 @@
         "app_port": 8000,
         "listen": null,
         "idle_timeout": "10min",
-        "workers": [
-            "stry-horizon"
-        ],
+        "workers": ["stry-horizon"],
         "idle_check": {
             "container": "stry-horizon",
             "user": "docker",
@@ -19,11 +17,7 @@
         },
         "schedule": {
             "container": "stry-schedule",
-            "at": [
-                "*:00",
-                "01:00",
-                "02:00"
-            ],
+            "at": ["*:00", "01:00", "02:00"],
             "environment": {
                 "APP_COMMAND": "php -d variables_order=EGPCS /app/artisan schedule:run",
                 "APP_OPTIMIZE": "false"
