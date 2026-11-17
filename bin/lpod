@@ -164,6 +164,7 @@ function display_help {
     echo "  ${GREEN}lpod quadlet fetch URL --ref REF --json${NC} List the files of a Git repository directory ([--path DIR])"
     echo "  ${GREEN}lpod quadlet catalog URL --ref REF --json${NC} The pods.yml of every application directory of a Git repository"
     echo "  ${GREEN}lpod quadlet tags URL --json${NC}           The tags of a Git repository, newest version first"
+    echo "  ${GREEN}lpod quadlet head URL --ref BRANCH --json${NC} The newest commit of a branch of a Git repository"
     echo "  ${GREEN}lpod secret rm NAME [--json]${NC}            Remove a secret"
     echo "  ${GREEN}lpod settings [set] --json${NC}              The auto-update timer and lingering, or change them ([--auto-update on|off] [--schedule S] [--rollback on|off] [--linger on|off])"
     echo
@@ -3716,8 +3717,9 @@ function cmd_quadlet_json {
         fetch) cmd_quadlet_fetch "$@" ;;
         catalog) cmd_quadlet_catalog "$@" ;;
         tags) cmd_quadlet_tags "$@" ;;
+        head) cmd_quadlet_head "$@" ;;
         *)
-            echo "Usage: lpod quadlet check|install|fetch|catalog|tags ... --json" >&2
+            echo "Usage: lpod quadlet check|install|fetch|catalog|tags|head ... --json" >&2
 
             return 1
             ;;
@@ -3977,6 +3979,40 @@ function cmd_quadlet_catalog {
 
         jq -Rs --arg path "$(basename "$DIRECTORY")" '{path: $path, manifest: .}' < "$FILE"
     done | jq -s --argjson contract "$LPOD_CONTRACT" --arg commit "$COMMIT" '{contract: $contract, commit: $commit, applications: .}'
+}
+
+# "lpod quadlet head URL --ref BRANCH --json": prints the newest commit of a
+# branch of a Git repository, read with "git ls-remote" without cloning, or
+# null when the repository has no such branch (such as for a tag)...
+function cmd_quadlet_head {
+    local REPOSITORY="${1:-}"
+    shift || true
+
+    local REFERENCE=""
+
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --ref) REFERENCE="${2:-}"; shift ;;
+            --json) ;;
+            *) echo "Unknown option: $1" >&2; return 1 ;;
+        esac
+
+        shift
+    done
+
+    if [ -z "$REFERENCE" ]; then
+        echo "Pass the branch with --ref." >&2
+
+        return 1
+    fi
+
+    check_git_source "$REPOSITORY" "$REFERENCE" "" || return 1
+
+    local COMMIT
+    COMMIT="$(GIT_TERMINAL_PROMPT=0 git -c protocol.ext.allow=never -c protocol.file.allow=never ls-remote --heads -- "$REPOSITORY" "refs/heads/${REFERENCE}" | cut -f 1 | head -n 1)" || return 1
+
+    jq -n --argjson contract "$LPOD_CONTRACT" --arg branch "$REFERENCE" --arg commit "$COMMIT" \
+        '{contract: $contract, branch: $branch, commit: (if $commit == "" then null else $commit end)}'
 }
 
 # "lpod quadlet tags URL --json": prints the tags of a Git repository, newest
