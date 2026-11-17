@@ -7,6 +7,7 @@
         "port": 8000,
         "local_port": 18000,
         "app_port": 8000,
+        "listen": null,
         "idle_timeout": "10min",
         "workers": [
             "stry-horizon"
