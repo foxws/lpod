@@ -1,9 +1,42 @@
 {
     "contract": 1,
-    "proxy": { "installed": true, "running": true },
+    "proxy": { "installed": true, "running": true, "layout": "sites", "domain": null },
     "routes": [
-        { "application": "stry", "role": "app", "host": "stry.home.arpa", "upstream": "systemd-stry:8000", "main": true, "target": "host.containers.internal:8000" },
-        { "application": "stry", "role": "websockets", "host": "ws.stry.home.arpa", "upstream": "systemd-stry-reverb:6001", "main": false, "target": "systemd-stry-reverb:6001" },
-        { "application": "immich", "role": "app", "host": "photos.home.arpa", "upstream": "immich-server:2283", "main": true, "target": "immich-server:2283" }
+        {
+            "application": "stry",
+            "role": "app",
+            "host": "stry.home.arpa",
+            "upstream": "systemd-stry:8000",
+            "main": true,
+            "via": null,
+            "target": "host.containers.internal:8000"
+        },
+        {
+            "application": "stry",
+            "role": "websockets",
+            "host": "ws.stry.home.arpa",
+            "upstream": "systemd-stry-reverb:6001",
+            "main": false,
+            "via": null,
+            "target": "systemd-stry-reverb:6001"
+        },
+        {
+            "application": "stry",
+            "role": "s3",
+            "host": "s3.stry.home.arpa",
+            "upstream": "systemd-stry-rustfs:9000",
+            "main": false,
+            "via": "main",
+            "target": "host.containers.internal:8000"
+        },
+        {
+            "application": "immich",
+            "role": "app",
+            "host": "photos.home.arpa",
+            "upstream": "immich-server:2283",
+            "main": true,
+            "via": null,
+            "target": "immich-server:2283"
+        }
     ]
 }
