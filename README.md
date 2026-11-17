@@ -8,6 +8,7 @@ Pairs naturally with [Pods](https://github.com/foxws/pods), a web UI that manage
 
 - Linux with systemd (macOS, Windows, and WSL are not supported)
 - Podman with Quadlet support
+- For the `--json` commands that tools such as Pods run: `jq`, and `git` for `quadlet fetch`, `catalog`, `tags` and `head`
 
 ## Install
 

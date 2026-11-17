@@ -407,6 +407,13 @@ function cmd_doctor {
         doctor_report warn jq "jq isn't installed, so the --json commands that tools such as Pods run don't work" "Install jq from your distribution's packages."
     fi
 
+    # "quadlet fetch", "catalog", "tags" and "head" read Git repositories...
+    if command -v git >/dev/null 2>&1; then
+        doctor_report ok git "git is installed, for installing and updating from Git repositories"
+    else
+        doctor_report warn git "git isn't installed, so applications can't be installed or updated from Git repositories" "Install git from your distribution's packages."
+    fi
+
     # The systemd manager that runs the Quadlet units...
     if "${SYSTEMCTL_CMD[@]}" show-environment >/dev/null 2>&1; then
         doctor_report ok systemd "The systemd ${SYSTEMD_SCOPE} manager is reachable"
