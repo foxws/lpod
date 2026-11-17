@@ -1235,7 +1235,8 @@ function ondemand_container_unit {
 # a socket start the application on its first request, and its units sleep
 # when it's idle. It writes:
 #
-# - APP-ondemand.socket, listening on PORT, and APP-ondemand.service, a
+# - APP-ondemand.socket, listening on PORT (on every address, or with
+#   --listen on that address only), and APP-ondemand.service, a
 #   systemd-socket-proxyd that starts the app, forwards to it and exits
 #   after --idle-timeout without connections;
 # - the drop-in lpod-ondemand.conf for the main unit, which publishes the
@@ -1254,7 +1255,7 @@ function cmd_app_ondemand_enable {
     local APPLICATION="$1"
     shift
 
-    local PORT="" APP_PORT="" IDLE_TIMEOUT="10min"
+    local PORT="" APP_PORT="" LISTEN="" IDLE_TIMEOUT="10min"
     local IDLE_CONTAINER="" IDLE_USER="" IDLE_COMMAND="" SCHEDULE=""
     local WORKERS=() SCHEDULE_AT=() SCHEDULE_ENV=()
 
@@ -1262,6 +1263,7 @@ function cmd_app_ondemand_enable {
         case "$1" in
             --port) PORT="${2:-}"; valid_port "$1" "$PORT" || return 1; shift ;;
             --app-port) APP_PORT="${2:-}"; valid_port "$1" "$APP_PORT" || return 1; shift ;;
+            --listen) LISTEN="${2:-}"; shift ;;
             --idle-timeout) IDLE_TIMEOUT="${2:-}"; shift ;;
             --worker) WORKERS+=("${2:-}"); shift ;;
             --idle-container) IDLE_CONTAINER="${2:-}"; shift ;;
@@ -1291,6 +1293,21 @@ function cmd_app_ondemand_enable {
         echo "--port must be 55535 or lower, since the app gets that port + 10000 on 127.0.0.1." >&2
 
         return 1
+    fi
+
+    # An IP address, so the socket can stay on this machine (127.0.0.1)...
+    local LISTEN_STREAM="$PORT"
+
+    if [ -n "$LISTEN" ]; then
+        if [[ "$LISTEN" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]]; then
+            LISTEN_STREAM="${LISTEN}:${PORT}"
+        elif [[ "$LISTEN" =~ ^[0-9A-Fa-f:]+$ ]] && [[ "$LISTEN" == *:* ]]; then
+            LISTEN_STREAM="[${LISTEN}]:${PORT}"
+        else
+            echo "--listen takes an IP address, such as 127.0.0.1." >&2
+
+            return 1
+        fi
     fi
 
     if [ -z "$IDLE_TIMEOUT" ] || [[ "$IDLE_TIMEOUT" =~ [[:space:]] ]] || ! systemd-analyze timespan -- "$IDLE_TIMEOUT" > /dev/null 2>&1; then
@@ -1408,6 +1425,7 @@ function cmd_app_ondemand_enable {
         --argjson port "$PORT" \
         --argjson local_port "$LOCAL_PORT" \
         --argjson app_port "$APP_PORT" \
+        --arg listen "$LISTEN" \
         --arg idle_timeout "$IDLE_TIMEOUT" \
         --arg idle_container "$IDLE_CONTAINER" \
         --arg idle_user "$IDLE_USER" \
@@ -1419,6 +1437,7 @@ function cmd_app_ondemand_enable {
             port: $port,
             local_port: $local_port,
             app_port: $app_port,
+            listen: (if $listen == "" then null else $listen end),
             idle_timeout: $idle_timeout,
             workers: list("worker"),
             idle_check: (if $idle_container == "" then null else {container: $idle_container, user: (if $idle_user == "" then null else $idle_user end), command: $idle_command} end),
@@ -1473,7 +1492,7 @@ function cmd_app_ondemand_enable {
             echo "Wants=${WANTS[*]}"
         fi
 
-        printf '\n[Socket]\nListenStream=%s\n\n[Install]\nWantedBy=sockets.target\n' "$PORT"
+        printf '\n[Socket]\nListenStream=%s\n\n[Install]\nWantedBy=sockets.target\n' "$LISTEN_STREAM"
     } > "${SYSTEMD_UNIT_PATH}/${SOCKET}" || return 1
 
     {
@@ -1769,7 +1788,7 @@ function cmd_app_ondemand_status {
         {
             contract: $contract,
             ondemand: ({enabled: ($settings != null), listening: $listening, awake: $awake}
-                + ($settings // {port: null, local_port: null, app_port: null, idle_timeout: null, workers: [], idle_check: null, schedule: null}))
+                + ($settings // {port: null, local_port: null, app_port: null, listen: null, idle_timeout: null, workers: [], idle_check: null, schedule: null}))
         }'
 }
 
@@ -3277,9 +3296,18 @@ case "$1" in
         ;;
 esac
 
+# The actions of an application's "--json" commands below...
+LPOD_APP_ACTIONS="status|files|logs|up|down|restart|redeploy|remove|secret|ondemand"
+
+# Whether "$1 $2" is an application command for an application named like a
+# host listing, such as Pods' own "pods": "lpod pods status --json"...
+function app_named_like_listing {
+    [[ "${1:-}" =~ ^(containers|images|volumes|networks|journal|events|settings|pods)$ ]] && [[ "${2:-}" =~ ^(${LPOD_APP_ACTIONS})$ ]]
+}
+
 # The host resources of the JSON contract. They only answer with "--json", so
 # the same words stay free as service names for the commands below...
-if json_requested "$@"; then
+if json_requested "$@" && ! app_named_like_listing "$@"; then
     case "$1" in
         containers)
             if [ "${2:-}" == "prune" ]; then cmd_containers_prune_json; else shift; cmd_containers_json "$@"; fi
