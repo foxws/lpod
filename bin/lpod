@@ -1793,6 +1793,26 @@ function cmd_app_ondemand_status {
         }'
 }
 
+# Starts or restarts an application's main unit. An on-demand application's
+# main unit has StopWhenUnneeded=yes, so started on its own it stops again
+# right away: while it sleeps, this starts its proxy instead, which needs the
+# app and keeps it up until --idle-timeout passes without connections, as if
+# a request had come in. Restarting an awake app restarts the proxy with it...
+function app_start_main {
+    local ACTION="$1"
+    local APP_NAME="$2"
+    local MAIN_UNIT="$3"
+    shift 3
+
+    if [ -n "$(ondemand_settings "$APP_NAME")" ] && { [ "$ACTION" == "start" ] || ! unit_is_active "$MAIN_UNIT"; }; then
+        "${SYSTEMCTL_CMD[@]}" "$@" start "${APP_NAME}-ondemand.service"
+
+        return
+    fi
+
+    "${SYSTEMCTL_CMD[@]}" "$@" "$ACTION" "$MAIN_UNIT"
+}
+
 # "lpod APP ondemand enable|disable|status --json"...
 function cmd_app_ondemand {
     local APPLICATION="$1"
@@ -1920,8 +1940,8 @@ function cmd_app_json {
             fi
 
             case "$COMMAND" in
-                up) "${SYSTEMCTL_CMD[@]}" "${NO_BLOCK[@]}" start "$(jq -r '.unit' <<< "$APPLICATION")" || return 1 ;;
-                restart) "${SYSTEMCTL_CMD[@]}" "${NO_BLOCK[@]}" restart "$(jq -r '.unit' <<< "$APPLICATION")" || return 1 ;;
+                up) app_start_main start "$(jq -r '.name' <<< "$APPLICATION")" "$(jq -r '.unit' <<< "$APPLICATION")" "${NO_BLOCK[@]}" || return 1 ;;
+                restart) app_start_main restart "$(jq -r '.name' <<< "$APPLICATION")" "$(jq -r '.unit' <<< "$APPLICATION")" "${NO_BLOCK[@]}" || return 1 ;;
                 # Every service of the application stops, not just the main
                 # one, since siblings don't always stop with it...
                 down)
@@ -1978,7 +1998,7 @@ function cmd_app_json {
                 "${LPOD_PODMAN_BINARY:-podman}" pull --quiet "$IMAGE" > /dev/null || return 1
             done < <(jq -r '[.detail.items[].image | select(. != null and (startswith("localhost/") | not))] | unique[]' <<< "$APPLICATION")
 
-            "${SYSTEMCTL_CMD[@]}" restart "$(jq -r '.unit' <<< "$APPLICATION")" || return 1
+            app_start_main restart "$APP_NAME" "$(jq -r '.unit' <<< "$APPLICATION")" || return 1
 
             json_ok
             ;;
