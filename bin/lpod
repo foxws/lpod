@@ -145,6 +145,8 @@ function display_help {
     echo "  ${GREEN}lpod APP ondemand enable --json${NC}         Start an application on its first request, and let it sleep when idle (--port P --app-port P, see the docs)"
     echo "  ${GREEN}lpod APP routes set --stdin --json${NC}      Send hostnames to an application through the Pods proxy (also: routes, routes remove)"
     echo "  ${GREEN}lpod proxy routes --json${NC}                The Pods proxy's state and every application's routes"
+    echo "  ${GREEN}lpod proxy settings [set --stdin] --json${NC} The Pods proxy's certificates, ports and image"
+    echo "  ${GREEN}lpod proxy certificate --json${NC}           The root certificate of the Pods proxy's local CA"
     echo "  ${GREEN}lpod APP ondemand disable|status --json${NC} Run it all the time again, or show its on-demand settings"
     echo "  ${GREEN}lpod containers --json${NC}                  Every container, managed by Quadlet or not"
     echo "  ${GREEN}lpod containers prune --json${NC}            Remove the stopped containers"
@@ -2017,6 +2019,26 @@ function proxy_reload {
     "${LPOD_PODMAN_BINARY:-podman}" exec systemd-pods-proxy caddy reload --config /etc/caddy/Caddyfile ${ADDRESS:+--address "$ADDRESS"} > /dev/null
 }
 
+# Writes the routes file of an application in the current layout, or removes
+# it when the application has no routes...
+function routes_write_site {
+    local APP_NAME="$1" ROUTES="$2"
+
+    rm -f "$(proxy_sites_path)/${APP_NAME}.caddy" "$(proxy_sites_path)/${APP_NAME}.Caddyfile"
+
+    if [ -z "$ROUTES" ] || [ "$(jq 'length' <<< "$ROUTES")" -eq 0 ]; then
+        return
+    fi
+
+    mkdir -p "$(proxy_sites_path)" || return 1
+
+    {
+        echo "# Written by \"lpod ${APP_NAME} routes set\". See \"Routes\" in lpod's docs/commands.md."
+        echo "# lpod-routes: $(jq -c . <<< "$ROUTES")"
+        routes_caddy "$APP_NAME" "$(proxy_layout)" "$ROUTES"
+    } > "$(routes_site_path "$APP_NAME")"
+}
+
 # Writes the routes file and the network drop-in of an application's stored
 # routes (or removes both when it has none), then applies them: a restart of
 # the proxy when the networks it joins changed, or else a reload of Caddy,
@@ -2024,9 +2046,8 @@ function proxy_reload {
 # when it starts...
 function routes_apply {
     local APP_NAME="$1"
-    local DROPINS SITE DROPIN ROUTES
+    local DROPINS DROPIN ROUTES
     DROPINS="$(proxy_dropin_path)"
-    SITE="$(routes_site_path "$APP_NAME")"
     DROPIN="${DROPINS}/lpod-routes-${APP_NAME}.conf"
     ROUTES="$(routes_settings "$APP_NAME")"
 
@@ -2036,18 +2057,12 @@ function routes_apply {
         BEFORE="$(cat "$DROPIN")"
     fi
 
-    rm -f "$(proxy_sites_path)/${APP_NAME}.caddy" "$(proxy_sites_path)/${APP_NAME}.Caddyfile"
+    routes_write_site "$APP_NAME" "$ROUTES" || return 1
 
     if [ -z "$ROUTES" ] || [ "$(jq 'length' <<< "$ROUTES")" -eq 0 ]; then
         rm -f "$DROPIN"
     else
-        mkdir -p "$(proxy_sites_path)" "$DROPINS" || return 1
-
-        {
-            echo "# Written by \"lpod ${APP_NAME} routes set\". See \"Routes\" in lpod's docs/commands.md."
-            echo "# lpod-routes: $(jq -c . <<< "$ROUTES")"
-            routes_caddy "$APP_NAME" "$(proxy_layout)" "$ROUTES"
-        } > "$SITE" || return 1
+        mkdir -p "$DROPINS" || return 1
 
         local NETWORKS
         mapfile -t NETWORKS < <(quadlet_units_json | jq -r --arg app "$APP_NAME" '.[] | select(.app == $app and .ext == "network") | .Name' | sort)
@@ -2227,6 +2242,405 @@ function cmd_proxy_json {
     printf '%s\n' "${ALL[@]}" | jq -s --argjson contract "$LPOD_CONTRACT" --argjson installed "$INSTALLED" --argjson running "$RUNNING" \
         --arg layout "$(proxy_layout)" --arg domain "$(proxy_wildcard_domain)" \
         '{contract: $contract, proxy: {installed: $installed, running: $running, layout: $layout, domain: (if $layout == "handlers" and $domain != "" then $domain else null end)}, routes: (add // [])}'
+}
+
+# The Podman secret that holds the API token of the proxy's DNS provider...
+LPOD_PROXY_DNS_SECRET="pods-proxy-dns-token"
+
+# The image of the wildcard mode: Caddy with the DNS plugins, which caddy:2
+# doesn't have...
+LPOD_PROXY_DNS_IMAGE="ghcr.io/foxws/pods-proxy:main"
+
+# The environment variable a DNS provider's plugin reads its token from...
+function proxy_dns_env {
+    case "$1" in
+        cloudflare) echo CLOUDFLARE_API_TOKEN ;;
+    esac
+}
+
+# The settings "proxy settings set" stored on the Caddyfile's "# lpod-proxy:"
+# line, as JSON, or nothing when lpod didn't write the Caddyfile...
+function proxy_stored_settings {
+    sed -n 's/^# lpod-proxy: //p' "$(proxy_caddyfile_path)" 2> /dev/null | head -n 1
+}
+
+# The proxy's Quadlet and its drop-ins, in the order Quadlet reads them, so
+# the last value of a key wins...
+function proxy_unit_files {
+    local UNITS="$1"
+    local UNIT_PATH DROPIN
+    UNIT_PATH="$(jq -r 'first(.[] | select(.Name == "pods-proxy.container") | .Path) // empty' <<< "$UNITS")"
+
+    if [ -n "$UNIT_PATH" ] && [ -f "$UNIT_PATH" ]; then
+        echo "$UNIT_PATH"
+    fi
+
+    for DROPIN in "$(proxy_dropin_path)"/*.conf; do
+        if [ -f "$DROPIN" ]; then
+            echo "$DROPIN"
+        fi
+    done
+}
+
+# The host port a drop-in publishes the proxy's container PORT on, the last
+# one when there are more...
+function proxy_published_port {
+    local PORT="$1"
+    shift
+
+    cat "$@" 2> /dev/null | sed -nE "s/^[[:space:]]*PublishPort=([^:]*:)?([0-9]+):${PORT}(\/tcp)?[[:space:]]*$/\2/p" | tail -n 1
+}
+
+# Whether a drop-in other than lpod's own passes ENV as a secret...
+function proxy_secret_elsewhere {
+    local ENV="$1"
+    local DROPIN
+
+    for DROPIN in "$(proxy_dropin_path)"/*.conf; do
+        [ -f "$DROPIN" ] || continue
+        [[ "$(basename "$DROPIN")" == lpod-* ]] && continue
+
+        if grep -qE "^[[:space:]]*Secret=.*target=${ENV}([,[:space:]]|$)" "$DROPIN"; then
+            echo "$DROPIN"
+
+            return
+        fi
+    done
+}
+
+# The settings of a Caddyfile lpod didn't write, as far as they can be read
+# from it and the drop-ins, so a form can start from them...
+function proxy_detected_settings {
+    local FILES=("$@")
+    local CADDYFILE MODE="" EMAIL DOMAIN="" PROVIDER RESOLVERS IMAGE
+    CADDYFILE="$(proxy_caddyfile_path)"
+
+    if [ -f "$CADDYFILE" ]; then
+        if [ "$(proxy_layout)" == "handlers" ]; then
+            MODE=wildcard
+            DOMAIN="$(proxy_wildcard_domain)"
+        elif grep -qE '^[[:space:]]*auto_https[[:space:]]+off' "$CADDYFILE" || cat "${FILES[@]}" 2> /dev/null | grep -qE '^[[:space:]]*Environment=PROXY_SCHEME=http[[:space:]]*$'; then
+            MODE=http
+        elif grep -qE '^[[:space:]]*(local_certs|cert_issuer[[:space:]]+internal)([[:space:]]|$)' "$CADDYFILE"; then
+            MODE=local
+        else
+            MODE=letsencrypt
+        fi
+    fi
+
+    EMAIL="$(sed -nE 's/^[[:space:]]*email[[:space:]]+([^[:space:]]+).*/\1/p' "$CADDYFILE" 2> /dev/null | head -n 1)"
+    PROVIDER="$(sed -nE 's/^[[:space:]]*acme_dns[[:space:]]+([a-z0-9_]+).*/\1/p' "$CADDYFILE" 2> /dev/null | head -n 1)"
+    RESOLVERS="$(sed -nE 's/^[[:space:]]*resolvers[[:space:]]+([^{}]+[^[:space:]{}]).*/\1/p' "$CADDYFILE" 2> /dev/null | head -n 1)"
+    IMAGE=""
+
+    if [ ${#FILES[@]} -gt 1 ]; then
+        IMAGE="$(cat "${FILES[@]:1}" 2> /dev/null | sed -nE 's/^[[:space:]]*Image=([^[:space:]]+).*/\1/p' | tail -n 1)"
+    fi
+
+    # The wildcard mode's own image is no override...
+    if [ "$MODE" == "wildcard" ] && [ "$IMAGE" == "$LPOD_PROXY_DNS_IMAGE" ]; then
+        IMAGE=""
+    fi
+
+    jq -n --arg mode "$MODE" --arg email "$EMAIL" --arg domain "$DOMAIN" --arg provider "$PROVIDER" --arg resolvers "$RESOLVERS" --arg image "$IMAGE" '
+        def nullable: if . == "" then null else . end;
+        {mode: ($mode | nullable), email: ($email | nullable), domain: ($domain | nullable), dns_provider: ($provider | nullable), resolvers: ($resolvers | nullable), image: ($image | nullable)}'
+}
+
+# "lpod proxy settings [set --stdin] --json": how the Pods proxy gets its
+# certificates, its ports and its image. "set" writes the Caddyfile and the
+# drop-in lpod-proxy.conf from {"mode", "email", "domain", "dns_provider",
+# "dns_token", "resolvers", "http_port", "https_port", "image"} on stdin...
+function cmd_proxy_settings_json {
+    require_jq
+
+    case "${1:-}" in
+        --json|"") proxy_settings_show ;;
+        set) shift; proxy_settings_set "$@" ;;
+        *)
+            echo "Usage: lpod proxy settings [set --stdin] --json" >&2
+
+            return 1
+            ;;
+    esac
+}
+
+function proxy_settings_show {
+    local UNITS INSTALLED=false RUNNING=false FILES STORED SETTINGS
+    UNITS="$(quadlet_units_json)" || return 1
+
+    if jq -e 'any(.[]; .Name == "pods-proxy.container")' > /dev/null <<< "$UNITS"; then
+        INSTALLED=true
+    fi
+
+    if unit_is_active pods-proxy.service; then
+        RUNNING=true
+    fi
+
+    mapfile -t FILES < <(proxy_unit_files "$UNITS")
+    STORED="$(proxy_stored_settings)"
+
+    if [ -n "$STORED" ]; then
+        SETTINGS="$(jq -c '{mode, email, domain, dns_provider, resolvers, image}' <<< "$STORED")"
+    else
+        SETTINGS="$(proxy_detected_settings "${FILES[@]}")"
+    fi
+
+    local PROVIDER ENV TOKEN=false
+    PROVIDER="$(jq -r '.dns_provider // empty' <<< "$SETTINGS")"
+    ENV="$(proxy_dns_env "${PROVIDER:-cloudflare}")"
+
+    if "${LPOD_PODMAN_BINARY:-podman}" secret exists "$LPOD_PROXY_DNS_SECRET" 2> /dev/null || [ -n "$(proxy_secret_elsewhere "$ENV")" ]; then
+        TOKEN=true
+    fi
+
+    local PORT_START=""
+
+    if [ "$(quadlet_scope)" == "rootless" ]; then
+        PORT_START="$(cat /proc/sys/net/ipv4/ip_unprivileged_port_start 2> /dev/null)"
+    fi
+
+    jq -n --argjson contract "$LPOD_CONTRACT" --argjson installed "$INSTALLED" --argjson running "$RUNNING" \
+        --argjson settings "$SETTINGS" --argjson managed "$([ -n "$STORED" ] && echo true || echo false)" --argjson token "$TOKEN" \
+        --arg http "$(proxy_published_port 80 "${FILES[@]}")" --arg https "$(proxy_published_port 443 "${FILES[@]}")" \
+        --arg scope "$(quadlet_scope)" --arg port_start "$PORT_START" '
+        def port: if . == "" then null else tonumber end;
+        {
+            contract: $contract,
+            proxy: {installed: $installed, running: $running},
+            settings: ({managed: $managed} + $settings + {http_port: ($http | port), https_port: ($https | port), dns_token: $token}),
+            host: {scope: $scope, unprivileged_port_start: ($port_start | port)}
+        }'
+}
+
+function proxy_settings_set {
+    local STDIN=false ARG
+
+    for ARG in "$@"; do
+        case "$ARG" in
+            --stdin) STDIN=true ;;
+            --json) ;;
+            *) echo "Unknown option: $ARG" >&2; return 1 ;;
+        esac
+    done
+
+    if [ "$STDIN" != true ]; then
+        echo "Pass the settings on stdin, with --stdin." >&2
+
+        return 1
+    fi
+
+    local INPUT PROBLEM
+    if ! INPUT="$(jq -c 'if type == "object" then . else error end' 2> /dev/null)"; then
+        echo 'Pass {"mode": "letsencrypt", "email": ..., ...} on stdin.' >&2
+
+        return 1
+    fi
+
+    PROBLEM="$(jq -r '
+        def hostname: type == "string" and test("^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?(\\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+$") and (length <= 253);
+        def port: type == "number" and . == floor and . >= 1 and . <= 65535;
+        def text($pattern): . == null or (type == "string" and test($pattern));
+        if (.mode | IN("letsencrypt", "local", "wildcard", "http") | not) then "mode must be letsencrypt, local, wildcard or http."
+        elif (.email // null | text("^[^@[:space:]{}]+@[A-Za-z0-9-]+(\\.[A-Za-z0-9-]+)+$") | not) then "Invalid email address."
+        elif .mode == "wildcard" and (.domain | hostname | not) then "The wildcard mode needs a domain with at least two labels, such as home.example.com."
+        elif .mode == "wildcard" and .dns_provider != "cloudflare" then "dns_provider must be cloudflare, the DNS plugin in \($image)."
+        elif (.resolvers // null | text("^[A-Za-z0-9.:-]+( [A-Za-z0-9.:-]+)*$") | not) then "resolvers must be IP addresses or hostnames, separated by spaces."
+        elif (.http_port // 80 | port | not) or (.https_port // 443 | port | not) then "The ports must be numbers from 1 to 65535."
+        elif .mode != "http" and (.http_port // 80) == (.https_port // 443) then "The HTTP and HTTPS ports must differ."
+        elif (.image // null | text("^[A-Za-z0-9][A-Za-z0-9._/:@-]{0,254}$") | not) then "Invalid image."
+        elif (.dns_token // null | text("^[[:graph:]]{1,1024}$") | not) then "Invalid DNS token."
+        else empty end
+    ' --arg image "$LPOD_PROXY_DNS_IMAGE" <<< "$INPUT")" || return 1
+
+    if [ -n "$PROBLEM" ]; then
+        echo "$PROBLEM" >&2
+
+        return 1
+    fi
+
+    local SETTINGS TOKEN
+    SETTINGS="$(jq -c '{
+        mode,
+        email: (.email // null),
+        domain: (if .mode == "wildcard" then .domain | ascii_downcase else null end),
+        dns_provider: (if .mode == "wildcard" then .dns_provider else null end),
+        resolvers: (if .mode == "wildcard" then .resolvers // null else null end),
+        http_port: (.http_port // 80),
+        https_port: (if .mode == "http" then null else .https_port // 443 end),
+        image: (.image // null)
+    }' <<< "$INPUT")"
+    TOKEN="$(jq -r '.dns_token // empty' <<< "$INPUT")"
+
+    local MODE PROVIDER ENV DROPINS DROPIN
+    MODE="$(jq -r '.mode' <<< "$SETTINGS")"
+    PROVIDER="$(jq -r '.dns_provider // empty' <<< "$SETTINGS")"
+    DROPINS="$(proxy_dropin_path)"
+    DROPIN="${DROPINS}/lpod-proxy.conf"
+
+    # Ports from another drop-in would be published twice. One that only
+    # publishes ports, such as install.sh's install.conf or the README's
+    # ports.conf, is replaced by lpod's; any other is left to you...
+    local FILE REPLACED=()
+
+    for FILE in "$DROPINS"/*.conf; do
+        [ -f "$FILE" ] || continue
+        [[ "$(basename "$FILE")" == lpod-* ]] && continue
+        grep -qE '^[[:space:]]*PublishPort=' "$FILE" || continue
+
+        if grep -vE '^[[:space:]]*(#.*|;.*|\[Container\]|PublishPort=.*|Environment=PROXY_SCHEME=[a-z]+)?[[:space:]]*$' "$FILE" > /dev/null; then
+            echo "${FILE} publishes ports of the proxy too. Remove its PublishPort= lines, since lpod sets them now." >&2
+
+            return 1
+        fi
+
+        REPLACED+=("$FILE")
+    done
+
+    # The DNS token, kept as a Podman secret unless another drop-in already
+    # passes one...
+    local SECRET=false ELSEWHERE=""
+
+    if [ "$MODE" == "wildcard" ]; then
+        ENV="$(proxy_dns_env "$PROVIDER")"
+        ELSEWHERE="$(proxy_secret_elsewhere "$ENV")"
+
+        if [ -n "$TOKEN" ] && [ -n "$ELSEWHERE" ]; then
+            echo "${ELSEWHERE} already passes ${ENV} to the proxy. Remove that Secret= line to keep the token in lpod's secret instead." >&2
+
+            return 1
+        fi
+
+        if [ -n "$TOKEN" ]; then
+            printf '%s' "$TOKEN" | "${LPOD_PODMAN_BINARY:-podman}" secret create --replace "$LPOD_PROXY_DNS_SECRET" - > /dev/null || return 1
+            SECRET=true
+        elif [ -z "$ELSEWHERE" ]; then
+            if ! "${LPOD_PODMAN_BINARY:-podman}" secret exists "$LPOD_PROXY_DNS_SECRET" 2> /dev/null; then
+                echo "The DNS challenge needs an API token of ${PROVIDER}: pass dns_token." >&2
+
+                return 1
+            fi
+
+            SECRET=true
+        fi
+    fi
+
+    # A Caddyfile lpod didn't write is kept next to it...
+    local CADDYFILE BACKUP=""
+    CADDYFILE="$(proxy_caddyfile_path)"
+
+    if [ -f "$CADDYFILE" ] && [ -z "$(proxy_stored_settings)" ]; then
+        BACKUP="${CADDYFILE}.$(date -u +%Y%m%d%H%M%S).backup"
+        cp -p "$CADDYFILE" "$BACKUP" || return 1
+    fi
+
+    mkdir -p "$(dirname "$CADDYFILE")" "$(proxy_sites_path)" "$DROPINS" || return 1
+    proxy_caddyfile "$SETTINGS" > "${CADDYFILE}.lpod" && mv "${CADDYFILE}.lpod" "$CADDYFILE" || return 1
+
+    {
+        echo "# Written by \"lpod proxy settings set\": the proxy's ports, image and DNS token."
+        echo "[Container]"
+        jq -r '"PublishPort=\(.http_port):80", (if .https_port != null then "PublishPort=\(.https_port):443", "PublishPort=\(.https_port):443/udp" else empty end)' <<< "$SETTINGS"
+        jq -r --arg image "$LPOD_PROXY_DNS_IMAGE" '(.image // (if .mode == "wildcard" then $image else empty end)) | "Image=\(.)"' <<< "$SETTINGS"
+
+        if [ "$MODE" == "http" ]; then
+            echo "Environment=PROXY_SCHEME=http"
+        fi
+
+        if [ "$SECRET" == true ]; then
+            echo "Secret=${LPOD_PROXY_DNS_SECRET},type=env,target=${ENV}"
+        fi
+    } > "$DROPIN" || return 1
+
+    if [ ${#REPLACED[@]} -gt 0 ]; then
+        rm -f "${REPLACED[@]}"
+    fi
+
+    # The layout may have changed, so every application's routes are written again...
+    local SITE APP_NAME SEEN=()
+
+    for SITE in "$(proxy_sites_path)"/*.caddy "$(proxy_sites_path)"/*.Caddyfile; do
+        [ -f "$SITE" ] || continue
+        APP_NAME="$(basename "$SITE")"
+        APP_NAME="${APP_NAME%.*}"
+        [[ " ${SEEN[*]} " == *" ${APP_NAME} "* ]] && continue
+        SEEN+=("$APP_NAME")
+
+        local ROUTES
+        ROUTES="$(routes_settings "$APP_NAME")"
+        [ -n "$ROUTES" ] || continue
+        routes_write_site "$APP_NAME" "$ROUTES" || return 1
+    done
+
+    "${SYSTEMCTL_CMD[@]}" daemon-reload || return 1
+
+    if unit_is_active pods-proxy.service; then
+        "${SYSTEMCTL_CMD[@]}" --no-block restart pods-proxy.service || return 1
+    fi
+
+    jq -n --argjson contract "$LPOD_CONTRACT" --arg backup "$BACKUP" '{contract: $contract, ok: true, backup: (if $backup == "" then null else $backup end)}'
+}
+
+# Prints the proxy's Caddyfile for SETTINGS. Sites in sites/*.Caddyfile work
+# in every mode, and the wildcard mode adds one site for *.DOMAIN with the
+# routes of sites/*.caddy inside it...
+function proxy_caddyfile {
+    jq -r --arg env "$(proxy_dns_env "$(jq -r '.dns_provider // empty' <<< "$1")")" '
+        "# Written by \"lpod proxy settings set\". See \"Proxy\" in lpod'"'"'s docs/commands.md.",
+        "# Saving the settings again replaces this file, so add your own sites in sites/*.Caddyfile.",
+        "# lpod-proxy: \(tojson)",
+        "{",
+        "\tadmin unix//config/admin.sock|0600",
+        (if .email != null then "\temail \(.email)" else empty end),
+        (if .mode == "local" then "\tlocal_certs" else empty end),
+        (if .mode == "http" then "\tauto_https off" else empty end),
+        (if .mode == "wildcard" then "\tacme_dns \(.dns_provider) {env.\($env)}" else empty end),
+        "\tservers {",
+        "\t\ttrusted_proxies static private_ranges",
+        "\t}",
+        "}",
+        "",
+        "import sites/*.Caddyfile",
+        (if .mode == "wildcard" then
+            "",
+            "*.\(.domain) {",
+            (if .resolvers != null then "\ttls {", "\t\tresolvers \(.resolvers)", "\t}", "" else empty end),
+            "\tencode zstd gzip",
+            "",
+            "\timport sites/*.caddy",
+            "",
+            "\thandle {",
+            "\t\tabort",
+            "\t}",
+            "}"
+        else empty end)
+    ' <<< "$1"
+}
+
+# "lpod proxy certificate --json": the root certificate of the proxy's local
+# certificate authority, which browsers trust once it's installed, or null
+# while Caddy hasn't made one (or the proxy isn't running)...
+function cmd_proxy_certificate_json {
+    require_jq
+
+    local CERTIFICATE="" FINGERPRINT="" EXPIRES=""
+
+    if unit_is_active pods-proxy.service; then
+        CERTIFICATE="$("${LPOD_PODMAN_BINARY:-podman}" exec systemd-pods-proxy cat /data/caddy/pki/authorities/local/root.crt 2> /dev/null)" || CERTIFICATE=""
+    fi
+
+    if [ -n "$CERTIFICATE" ] && command -v openssl > /dev/null 2>&1; then
+        FINGERPRINT="$(openssl x509 -noout -fingerprint -sha256 <<< "$CERTIFICATE" 2> /dev/null | sed 's/^[^=]*=//')"
+        EXPIRES="$(openssl x509 -noout -enddate <<< "$CERTIFICATE" 2> /dev/null | sed 's/^notAfter=//')"
+
+        if [ -n "$EXPIRES" ]; then
+            EXPIRES="$(date -u -d "$EXPIRES" +%Y-%m-%dT%H:%M:%SZ 2> /dev/null)"
+        fi
+    fi
+
+    jq -n --argjson contract "$LPOD_CONTRACT" --arg certificate "$CERTIFICATE" --arg fingerprint "$FINGERPRINT" --arg expires "$EXPIRES" '
+        def nullable: if . == "" then null else . end;
+        {contract: $contract, certificate: (if $certificate == "" then null else $certificate + "\n" end), fingerprint: ($fingerprint | nullable), expires: ($expires | nullable)}'
 }
 
 # "lpod APP ondemand enable|disable|status --json"...
@@ -3966,9 +4380,13 @@ if json_requested "$@" && ! app_named_like_listing "$@"; then
         settings) shift; cmd_settings_json "$@"; exit $? ;;
         events) shift; cmd_events_json "$@"; exit $? ;;
         pods) cmd_pods_json; exit $? ;;
-        # Only "proxy routes", so an application named proxy keeps its other commands.
+        # Only "proxy routes", "settings" and "certificate", so an application named proxy keeps its other commands.
         proxy)
-            if [ "${2:-}" == "routes" ]; then shift; cmd_proxy_json "$@"; exit $?; fi
+            case "${2:-}" in
+                routes) shift; cmd_proxy_json "$@"; exit $? ;;
+                settings) shift 2; cmd_proxy_settings_json "$@"; exit $? ;;
+                certificate) cmd_proxy_certificate_json; exit $? ;;
+            esac
             ;;
     esac
 fi

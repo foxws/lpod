@@ -103,6 +103,30 @@ If the same secret name is used more than once, `lpod` only asks for it once.
 
 For an `env` secret, leaving the value blank (just pressing Enter) skips it and keeps its current value untouched. This makes it easy to update a single secret with `lpod app secrets --replace` without having to re-enter every other one.
 
+## Proxy
+
+The Pods proxy is an application of its own, `pods-proxy`, installed with `lpod quadlet install pods-proxy --stdin --json` from Pods' `containers/proxy` and removed with `lpod pods-proxy remove --json`. `lpod proxy settings set` picks how it gets certificates, its ports and its image:
+
+| `mode` | Global options | Routes are written as |
+| --- | --- | --- |
+| `letsencrypt` | `email`, when given | a site per hostname, with a certificate from Let's Encrypt |
+| `local` | `local_certs` | a site per hostname, with a certificate from Caddy's local CA (see `proxy certificate`) |
+| `wildcard` | `email`, `acme_dns PROVIDER {env.TOKEN}` | handlers inside one `*.DOMAIN` site, with one certificate through a DNS challenge, which `abort`s unknown names |
+| `http` | `auto_https off` | a site per hostname over `http://`, for another proxy in front that handles HTTPS |
+
+```bash
+echo '{"mode": "wildcard", "email": "you@example.com", "domain": "home.example.com",
+    "dns_provider": "cloudflare", "dns_token": "...", "resolvers": "1.1.1.1",
+    "http_port": 80, "https_port": 443}' | lpod proxy settings set --stdin --json
+```
+
+- It writes `~/.config/pods-proxy/Caddyfile`, with the settings on its `# lpod-proxy:` line. Saving again replaces it, so add your own sites in `sites/*.Caddyfile`, which every mode imports. A Caddyfile lpod didn't write is kept next to it as `Caddyfile.TIMESTAMP.backup` first.
+- The Caddyfile's admin API listens on `unix//config/admin.sock` instead of port 2019, and lpod reloads Caddy through it.
+- `pods-proxy.container.d/lpod-proxy.conf` publishes `http_port` (default 80) and `https_port` (default 443, also over UDP for HTTP/3; not in `http` mode), and sets the `image`. A drop-in that only publishes ports, such as `install.sh`'s `install.conf` or a `ports.conf`, is removed; one that also sets other things is refused, so ports aren't published twice. Rootless Podman can't publish ports below `net.ipv4.ip_unprivileged_port_start`, which `proxy settings` reports.
+- The `wildcard` mode needs Caddy with the DNS provider's plugin, so its image is `ghcr.io/foxws/pods-proxy:main` unless `image` says otherwise; the other modes keep the Quadlet's `caddy:2`. `cloudflare` is the only `dns_provider` so far.
+- `dns_token` is kept as the Podman secret `pods-proxy-dns-token` and passed as `CLOUDFLARE_API_TOKEN`. Leave it out to keep the stored one. A drop-in of your own that already passes `CLOUDFLARE_API_TOKEN` keeps doing so, and a new token is then refused.
+- Every application's routes are written again for the new layout, then systemd is reloaded and the proxy restarted.
+
 ## Routes
 
 The Pods proxy (`pods-proxy`, a Caddy Quadlet; see Pods' README) sends hostnames to the containers of the applications on the host. lpod keeps each application's routes and writes what the proxy needs. How it writes them depends on the proxy's Caddyfile (`~/.config/pods-proxy/Caddyfile`):
@@ -204,6 +228,9 @@ Tools such as Pods manage a host by running these commands over SSH. With `--jso
 | `lpod APP routes set --stdin --json` | `{"ok": true}`. Replaces the application's routes with `{"routes": [{"role", "host", "upstream", "main", "via"}]}` on stdin, and applies them. An empty list removes them |
 | `lpod APP routes remove --json` | `{"ok": true}`. Removes the application's routes |
 | `lpod proxy routes --json` | `proxy` (`installed`, `running`, the `layout` of its Caddyfile, `sites` or `handlers`, and the wildcard `domain` in the `handlers` layout) and `routes`: every application's routes, each with its `application` |
+| `lpod proxy settings --json` | `proxy` (`installed`, `running`), `settings` (see [Proxy](#proxy)): whether lpod wrote the Caddyfile (`managed`; if not, the settings are read from it as far as they can be), `mode`, `email`, `domain`, `dns_provider`, `resolvers`, `image` (`null` for the mode's own), `http_port` and `https_port` (as published, or `null`), and whether a `dns_token` is there; `host` (`scope`, and `unprivileged_port_start` when rootless) |
+| `lpod proxy settings set --stdin --json` | `{"ok": true, "backup": PATH}`, where `backup` is the hand-written Caddyfile it replaced, or `null`. Takes the settings on stdin |
+| `lpod proxy certificate --json` | `certificate`: the PEM of the proxy's local CA root (or `null` until Caddy has made one, or while the proxy isn't running), with its SHA-256 `fingerprint` and when it `expires` (`null` without openssl on the host) |
 | `lpod APP ondemand disable --json` | `{"ok": true}`. Removes what `enable` wrote, and starts the application again |
 | `lpod APP ondemand status --json` | `ondemand`: whether it's `enabled`, whether the socket is `listening`, whether the app is `awake` (its main unit runs), and the settings it was enabled with: `port`, `local_port`, `app_port`, `listen` (`null` for every address), `idle_timeout`, `workers`, `idle_check` (`container`, `user` and `command`, or `null`) and `schedule` (`container`, `at` and `environment`, or `null`). They're `null` (`workers` empty) when it's off |
 | `lpod secret rm NAME [--json]` | `{"ok": true}` |
