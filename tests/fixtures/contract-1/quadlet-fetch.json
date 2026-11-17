@@ -2,6 +2,7 @@
     "contract": 1,
     "commit": "a41f9c2",
     "manifest": null,
+    "manifest_path": null,
     "files": [
         { "name": "nextcloud.pod", "content": "[Pod]\nPodName=nextcloud\nPublishPort=8443:443\n" },
         {

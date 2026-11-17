@@ -158,6 +158,7 @@ function display_help {
     echo "  ${GREEN}lpod quadlet check --stdin --json${NC}       Check Quadlet files with a dry run"
     echo "  ${GREEN}lpod quadlet install APP --stdin --json${NC} Install Quadlet files as an application ([--replace] [--start])"
     echo "  ${GREEN}lpod quadlet fetch URL --ref REF --json${NC} List the files of a Git repository directory ([--path DIR])"
+    echo "  ${GREEN}lpod quadlet catalog URL --ref REF --json${NC} The pods.yml of every application directory of a Git repository"
     echo "  ${GREEN}lpod secret rm NAME [--json]${NC}            Remove a secret"
     echo "  ${GREEN}lpod settings [set] --json${NC}              The auto-update timer and lingering, or change them ([--auto-update on|off] [--schedule S] [--rollback on|off] [--linger on|off])"
     echo
@@ -2783,7 +2784,7 @@ function quadlet_generator {
     return 1
 }
 
-# "lpod quadlet check|install|fetch ... --json"...
+# "lpod quadlet check|install|fetch|catalog ... --json"...
 function cmd_quadlet_json {
     require_jq
 
@@ -2794,8 +2795,9 @@ function cmd_quadlet_json {
         check) cmd_quadlet_check "$@" ;;
         install) cmd_quadlet_install "$@" ;;
         fetch) cmd_quadlet_fetch "$@" ;;
+        catalog) cmd_quadlet_catalog "$@" ;;
         *)
-            echo "Usage: lpod quadlet check|install|fetch ... --json" >&2
+            echo "Usage: lpod quadlet check|install|fetch|catalog ... --json" >&2
 
             return 1
             ;;
@@ -2894,9 +2896,55 @@ function cmd_quadlet_install {
     json_ok
 }
 
+# Checks the URL, branch or tag and directory of a Git repository that
+# "quadlet fetch" and "quadlet catalog" clone, so neither git nor a path
+# can be pointed anywhere else.
+function check_git_source {
+    local REPOSITORY="$1" REFERENCE="$2" DIRECTORY="$3"
+
+    if ! [[ "$REPOSITORY" =~ ^(https://|ssh://|git@)[A-Za-z0-9][A-Za-z0-9._~:/@%+-]*$ ]]; then
+        echo "Use an https://, ssh:// or git@ repository URL." >&2
+
+        return 1
+    fi
+
+    if ! [[ "$REFERENCE" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]*$ ]] || [[ "$REFERENCE" == *..* ]]; then
+        echo "Invalid branch or tag: ${REFERENCE}." >&2
+
+        return 1
+    fi
+
+    if [ -n "$DIRECTORY" ] && { ! [[ "$DIRECTORY" =~ ^[A-Za-z0-9._-][A-Za-z0-9._/-]*$ ]] || [[ "$DIRECTORY" == *..* ]]; }; then
+        echo "Invalid directory: ${DIRECTORY}." >&2
+
+        return 1
+    fi
+
+    if ! command -v git > /dev/null 2>&1; then
+        echo "lpod needs git to fetch a repository." >&2
+
+        return 1
+    fi
+}
+
+# Makes a shallow clone of one branch or tag into DESTINATION, without
+# prompting for credentials or allowing local and ext:: transports.
+function clone_git_source {
+    GIT_TERMINAL_PROMPT=0 git -c protocol.ext.allow=never -c protocol.file.allow=never clone --quiet --depth 1 --branch "$2" -- "$1" "$3"
+}
+
+# Whether FILE is a pods.yml lpod returns: a regular file of at most 64 KiB.
+# A symlink is ignored, so a repository can't make lpod read a file on the
+# host.
+function is_readable_manifest {
+    [ -f "$1" ] && [ ! -L "$1" ] && [ "$(wc -c < "$1")" -le 65536 ]
+}
+
 # "lpod quadlet fetch URL --ref REF [--path DIR] --json": prints the files in
-# a directory of a Git repository, without installing them, and the
-# repository's pods.yml manifest...
+# a directory of a Git repository, without installing them, and the nearest
+# pods.yml manifest: the one in that directory, or else in a directory above
+# it, up to the repository's root. "manifest_path" is the directory it was
+# found in ("" for the root), which the paths of its sources are relative to.
 function cmd_quadlet_fetch {
     local REPOSITORY="${1:-}"
     shift || true
@@ -2914,42 +2962,20 @@ function cmd_quadlet_fetch {
         shift
     done
 
-    if ! [[ "$REPOSITORY" =~ ^(https://|ssh://|git@)[A-Za-z0-9][A-Za-z0-9._~:/@%+-]*$ ]]; then
-        echo "Use an https://, ssh:// or git@ repository URL." >&2
-
-        return 1
-    fi
-
-    if ! [[ "$REFERENCE" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]*$ ]] || [[ "$REFERENCE" == *..* ]]; then
-        echo "Invalid branch or tag: ${REFERENCE}." >&2
-
-        return 1
-    fi
-
     DIRECTORY="${DIRECTORY%/}"
 
-    if [ -n "$DIRECTORY" ] && { ! [[ "$DIRECTORY" =~ ^[A-Za-z0-9._-][A-Za-z0-9._/-]*$ ]] || [[ "$DIRECTORY" == *..* ]]; }; then
-        echo "Invalid directory: ${DIRECTORY}." >&2
-
-        return 1
-    fi
-
-    if ! command -v git > /dev/null 2>&1; then
-        echo "lpod needs git to fetch a repository." >&2
-
-        return 1
-    fi
+    check_git_source "$REPOSITORY" "$REFERENCE" "$DIRECTORY" || return 1
 
     local WORK
     WORK="$(mktemp -d)" || return 1
     # shellcheck disable=SC2064
     trap "rm -rf '${WORK}'" RETURN
 
-    GIT_TERMINAL_PROMPT=0 git -c protocol.ext.allow=never -c protocol.file.allow=never clone --quiet --depth 1 --branch "$REFERENCE" -- "$REPOSITORY" "${WORK}/repository" || return 1
+    clone_git_source "$REPOSITORY" "$REFERENCE" "${WORK}/repository" || return 1
 
     local SOURCE="${WORK}/repository${DIRECTORY:+/$DIRECTORY}"
 
-    if [ ! -d "$SOURCE" ]; then
+    if [ ! -d "$SOURCE" ] || [ -L "$SOURCE" ]; then
         echo "${DIRECTORY} is not a directory in the repository." >&2
 
         return 1
@@ -2958,21 +2984,72 @@ function cmd_quadlet_fetch {
     local COMMIT
     COMMIT="$(git -C "${WORK}/repository" rev-parse --short HEAD)"
 
-    # The repository's pods.yml, the manifest tools such as Pods read to
-    # offer its sources and ask for its secrets, is returned as text
-    # whichever directory was asked for. A symlink is ignored, so a
-    # repository can't make lpod read a file on the host.
-    local MANIFEST="${WORK}/repository/pods.yml"
-    local MANIFEST_ARGS=(--argjson manifest null)
+    local MANIFEST_ARGS=(--argjson manifest null --argjson manifest_path null)
+    local LOOKUP="$DIRECTORY"
 
-    if [ -f "$MANIFEST" ] && [ ! -L "$MANIFEST" ] && [ "$(wc -c < "$MANIFEST")" -le 65536 ]; then
-        MANIFEST_ARGS=(--rawfile manifest "$MANIFEST")
-    fi
+    while true; do
+        if is_readable_manifest "${WORK}/repository${LOOKUP:+/$LOOKUP}/pods.yml"; then
+            MANIFEST_ARGS=(--rawfile manifest "${WORK}/repository${LOOKUP:+/$LOOKUP}/pods.yml" --arg manifest_path "$LOOKUP")
+
+            break
+        fi
+
+        [ -z "$LOOKUP" ] && break
+
+        if [[ "$LOOKUP" == */* ]]; then
+            LOOKUP="${LOOKUP%/*}"
+        else
+            LOOKUP=""
+        fi
+    done
 
     # shellcheck disable=SC2094
     find "$SOURCE" -maxdepth 1 -type f -size -256k ! -name '.*' | sort | head -n 50 | while IFS= read -r FILE; do
         jq -Rs --arg name "$(basename "$FILE")" '{name: $name, content: .}' < "$FILE"
-    done | jq -s --argjson contract "$LPOD_CONTRACT" --arg commit "$COMMIT" "${MANIFEST_ARGS[@]}" '{contract: $contract, commit: $commit, manifest: $manifest, files: .}'
+    done | jq -s --argjson contract "$LPOD_CONTRACT" --arg commit "$COMMIT" "${MANIFEST_ARGS[@]}" '{contract: $contract, commit: $commit, manifest: $manifest, manifest_path: $manifest_path, files: .}'
+}
+
+# "lpod quadlet catalog URL --ref REF --json": prints the pods.yml of every
+# directory at the root of a Git repository that has one, so a tool such as
+# Pods can offer each as an application. Up to 200 directories.
+function cmd_quadlet_catalog {
+    local REPOSITORY="${1:-}"
+    shift || true
+
+    local REFERENCE=""
+
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --ref) REFERENCE="${2:-}"; shift ;;
+            --json) ;;
+            *) echo "Unknown option: $1" >&2; return 1 ;;
+        esac
+
+        shift
+    done
+
+    check_git_source "$REPOSITORY" "$REFERENCE" "" || return 1
+
+    local WORK
+    WORK="$(mktemp -d)" || return 1
+    # shellcheck disable=SC2064
+    trap "rm -rf '${WORK}'" RETURN
+
+    clone_git_source "$REPOSITORY" "$REFERENCE" "${WORK}/repository" || return 1
+
+    local COMMIT
+    COMMIT="$(git -C "${WORK}/repository" rev-parse --short HEAD)"
+
+    find "${WORK}/repository" -mindepth 2 -maxdepth 2 -name pods.yml ! -path '*/.*/*' | sort | head -n 200 | while IFS= read -r FILE; do
+        local DIRECTORY
+        DIRECTORY="$(dirname "$FILE")"
+
+        if [ -L "$DIRECTORY" ] || ! is_readable_manifest "$FILE"; then
+            continue
+        fi
+
+        jq -Rs --arg path "$(basename "$DIRECTORY")" '{path: $path, manifest: .}' < "$FILE"
+    done | jq -s --argjson contract "$LPOD_CONTRACT" --arg commit "$COMMIT" '{contract: $contract, commit: $commit, applications: .}'
 }
 
 # "lpod APP remove [--volumes] [--images] [--secrets] --json": stops the
