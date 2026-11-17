@@ -159,6 +159,7 @@ function display_help {
     echo "  ${GREEN}lpod quadlet install APP --stdin --json${NC} Install Quadlet files as an application ([--replace] [--start])"
     echo "  ${GREEN}lpod quadlet fetch URL --ref REF --json${NC} List the files of a Git repository directory ([--path DIR])"
     echo "  ${GREEN}lpod quadlet catalog URL --ref REF --json${NC} The pods.yml of every application directory of a Git repository"
+    echo "  ${GREEN}lpod quadlet tags URL --json${NC}           The tags of a Git repository, newest version first"
     echo "  ${GREEN}lpod secret rm NAME [--json]${NC}            Remove a secret"
     echo "  ${GREEN}lpod settings [set] --json${NC}              The auto-update timer and lingering, or change them ([--auto-update on|off] [--schedule S] [--rollback on|off] [--linger on|off])"
     echo
@@ -2842,7 +2843,7 @@ function quadlet_generator {
     return 1
 }
 
-# "lpod quadlet check|install|fetch|catalog ... --json"...
+# "lpod quadlet check|install|fetch|catalog|tags ... --json"...
 function cmd_quadlet_json {
     require_jq
 
@@ -2854,8 +2855,9 @@ function cmd_quadlet_json {
         install) cmd_quadlet_install "$@" ;;
         fetch) cmd_quadlet_fetch "$@" ;;
         catalog) cmd_quadlet_catalog "$@" ;;
+        tags) cmd_quadlet_tags "$@" ;;
         *)
-            echo "Usage: lpod quadlet check|install|fetch|catalog ... --json" >&2
+            echo "Usage: lpod quadlet check|install|fetch|catalog|tags ... --json" >&2
 
             return 1
             ;;
@@ -2960,11 +2962,7 @@ function cmd_quadlet_install {
 function check_git_source {
     local REPOSITORY="$1" REFERENCE="$2" DIRECTORY="$3"
 
-    if ! [[ "$REPOSITORY" =~ ^(https://|ssh://|git@)[A-Za-z0-9][A-Za-z0-9._~:/@%+-]*$ ]]; then
-        echo "Use an https://, ssh:// or git@ repository URL." >&2
-
-        return 1
-    fi
+    check_git_repository "$REPOSITORY" || return 1
 
     if ! [[ "$REFERENCE" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]*$ ]] || [[ "$REFERENCE" == *..* ]]; then
         echo "Invalid branch or tag: ${REFERENCE}." >&2
@@ -2974,6 +2972,17 @@ function check_git_source {
 
     if [ -n "$DIRECTORY" ] && { ! [[ "$DIRECTORY" =~ ^[A-Za-z0-9._-][A-Za-z0-9._/-]*$ ]] || [[ "$DIRECTORY" == *..* ]]; }; then
         echo "Invalid directory: ${DIRECTORY}." >&2
+
+        return 1
+    fi
+
+}
+
+# Checks a Git repository URL, so git can't be pointed at a local path or
+# another transport, and that git is installed.
+function check_git_repository {
+    if ! [[ "$1" =~ ^(https://|ssh://|git@)[A-Za-z0-9][A-Za-z0-9._~:/@%+-]*$ ]]; then
+        echo "Use an https://, ssh:// or git@ repository URL." >&2
 
         return 1
     fi
@@ -3108,6 +3117,47 @@ function cmd_quadlet_catalog {
 
         jq -Rs --arg path "$(basename "$DIRECTORY")" '{path: $path, manifest: .}' < "$FILE"
     done | jq -s --argjson contract "$LPOD_CONTRACT" --arg commit "$COMMIT" '{contract: $contract, commit: $commit, applications: .}'
+}
+
+# "lpod quadlet tags URL --json": prints the tags of a Git repository, newest
+# version first, each with the commit it points at, without cloning it. Up to
+# 100, so a tool such as Pods can offer to update an application to a newer
+# release. Tags that "quadlet fetch --ref" would refuse are left out.
+function cmd_quadlet_tags {
+    local REPOSITORY="${1:-}"
+    shift || true
+
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) ;;
+            *) echo "Unknown option: $1" >&2; return 1 ;;
+        esac
+
+        shift
+    done
+
+    check_git_repository "$REPOSITORY" || return 1
+
+    local REFS
+    REFS="$(GIT_TERMINAL_PROMPT=0 git -c protocol.ext.allow=never -c protocol.file.allow=never ls-remote --tags -- "$REPOSITORY")" || return 1
+
+    # An annotated tag is listed twice: as the tag object, and peeled
+    # ("TAG^{}") as the commit it points at, which is the one to keep. The
+    # sort key turns the first "-" into "~", which "sort -V" puts before the
+    # release itself, so v1.2.0-rc.1 comes after v1.2.0...
+    local LINES
+    LINES="$(awk -F'\t' '
+        { name = $2; sub(/^refs\/tags\//, "", name) }
+        name ~ /\^\{\}$/ { sub(/\^\{\}$/, "", name); peeled[name] = $1; next }
+        { commit[name] = $1 }
+        END { for (name in commit) print name "\t" (name in peeled ? peeled[name] : commit[name]) }
+    ' <<< "$REFS" | grep -E '^[A-Za-z0-9][A-Za-z0-9._/-]*'$'\t' | grep -v '\.\.' \
+        | awk -F'\t' '{ key = $1; sub(/-/, "~", key); print key "\t" $0 }' \
+        | sort -t $'\t' -k1,1 -V -r | cut -f 2- | head -n 100)"
+
+    jq -Rn --argjson contract "$LPOD_CONTRACT" '
+        {contract: $contract, tags: [inputs | select(. != "") | split("\t") | {name: .[0], commit: .[1][0:7]}]}
+    ' <<< "$LINES"
 }
 
 # "lpod APP remove [--volumes] [--images] [--secrets] --json": stops the

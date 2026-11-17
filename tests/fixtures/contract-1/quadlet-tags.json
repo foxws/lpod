@@ -1,0 +1,9 @@
+{
+    "contract": 1,
+    "tags": [
+        { "name": "v3.2.0", "commit": "c41e9a2" },
+        { "name": "v3.2.0-rc.1", "commit": "8b03d17" },
+        { "name": "v3.1.0", "commit": "a41f9c2" },
+        { "name": "v3.0.0", "commit": "5e0b7d1" }
+    ]
+}
