@@ -1,0 +1,4 @@
+{
+    "contract": 1,
+    "removed": ["immich-ml.container", "immich-server.container.d/old.conf"]
+}
