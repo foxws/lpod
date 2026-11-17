@@ -115,6 +115,8 @@ For an `env` secret, leaving the value blank (just pressing Enter) skips it and 
 | `APP-idle.service`, `APP-idle.timer` | With `--worker`: every minute, once the app is asleep, the scheduler isn't running and the `--idle-command` succeeds, stops the workers, so the services they need can sleep too |
 | `SCHEDULE.timer`, `lpod-ondemand.conf` for the scheduler | With `--schedule`: turns the scheduler container into a oneshot that only runs at the `--schedule-at` minutes |
 
+Starting the main unit on its own doesn't work once it has `StopWhenUnneeded=yes`: nothing needs it, so systemd stops it again. `lpod APP up` therefore starts `APP-ondemand.service` instead, the same way a request does, and the app sleeps again after `--idle-timeout` without connections. `restart` and `redeploy` do the same while the app sleeps, and restart it (and the proxy with it) while it's awake. `lpod APP down` stops it, and the next request wakes it.
+
 ```bash
 lpod stry ondemand enable --json \
     --port 8000 --app-port 8000 \
@@ -156,9 +158,9 @@ Tools such as Pods manage a host by running these commands over SSH. With `--jso
 | `lpod APP status --json` | `application`: what `apps` prints, plus its `path`, `volumes`, `secrets` and containers (`items`) with their CPU and memory use |
 | `lpod APP files --json` | `files`: the application's Quadlets and their drop-ins, with their contents |
 | `lpod APP logs --json [--lines N] [--since TIME]` | `entries`: the journal of the application's units, as `time`, `unit`, `priority` and `message` |
-| `lpod APP up\|down\|restart --json [--no-block]` | `{"ok": true}`. `up` and `restart` act on the main unit, `down` stops every unit of the application. With `--no-block`, it returns without waiting for systemd |
+| `lpod APP up\|down\|restart --json [--no-block]` | `{"ok": true}`. `up` and `restart` act on the main unit, `down` stops every unit of the application. An on-demand application that sleeps is woken instead (see [On-demand](#on-demand)). With `--no-block`, it returns without waiting for systemd |
 | `lpod APP down --force --json` | `{"ok": true}`. Stops every unit of the application right away: it queues the stop (so `Restart=` doesn't start them again), kills their processes with SIGKILL, waits up to 10 seconds for them to go down, then clears their failed state and start limit with `reset-failed`. For an application stuck starting, in a restart loop or slow to shut down |
-| `lpod APP redeploy --json [--no-block]` | `{"ok": true}`. Pulls every image the application's containers use, except ones built on the host (`localhost/...`), then restarts its main unit. With `--no-block`, a transient unit, `lpod-redeploy-APP`, does the work and logs to the journal |
+| `lpod APP redeploy --json [--no-block]` | `{"ok": true}`. Pulls every image the application's containers use, except ones built on the host (`localhost/...`), then restarts its main unit, or wakes it when it's on demand and asleep. With `--no-block`, a transient unit, `lpod-redeploy-APP`, does the work and logs to the journal |
 | `lpod APP secret add NAME --type env\|mount --target TARGET --json` | `{"ok": true}`. Writes the drop-in `lpod-secret-NAME.conf` for the application's main container, next to its Quadlet |
 | `lpod APP ondemand enable --json --port PORT --app-port PORT [...]` | `{"ok": true}`. Lets a socket start the application on its first request, and its units sleep when idle. See [On-demand](#on-demand) for the options |
 | `lpod APP ondemand disable --json` | `{"ok": true}`. Removes what `enable` wrote, and starts the application again |
