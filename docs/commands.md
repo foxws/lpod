@@ -103,6 +103,27 @@ If the same secret name is used more than once, `lpod` only asks for it once.
 
 For an `env` secret, leaving the value blank (just pressing Enter) skips it and keeps its current value untouched. This makes it easy to update a single secret with `lpod app secrets --replace` without having to re-enter every other one.
 
+## Routes
+
+The Pods proxy (`pods-proxy`, a Caddy Quadlet; see Pods' README) sends hostnames to the containers of the applications on the host. lpod keeps each application's routes and writes what the proxy needs:
+
+| File | Role |
+| --- | --- |
+| `~/.config/pods-proxy/sites/APP.Caddyfile` | One site per route, `{$PROXY_SCHEME:https}://HOST` with `reverse_proxy TARGET` (and compression on the main route). Its `# lpod-routes:` line holds the routes as given |
+| `pods-proxy.container.d/lpod-routes-APP.conf` | `Network=` for each `.network` Quadlet of the application, so the proxy reaches its containers by name |
+
+```bash
+echo '{"routes": [
+    {"role": "app", "host": "stry.home.arpa", "upstream": "systemd-stry:8000"},
+    {"role": "websockets", "host": "ws.stry.home.arpa", "upstream": "systemd-stry-reverb:6001"}
+]}' | lpod stry routes set --stdin --json
+```
+
+- A `role` names the route (`app`, `websockets`), a `host` is a hostname, and an `upstream` is a container and port. Hosts and roles are unique, and hosts are kept in lowercase.
+- The first route is the main one unless another says `"main": true`. While the application is on demand, its main route goes to its socket (`host.containers.internal:PORT`), so a request wakes it. `ondemand enable` and `disable` rewrite it. The other routes go to their containers, and get a 502 while the application sleeps. The socket must listen on an address the proxy container reaches, so not `--listen 127.0.0.1`.
+- When the networks the proxy joins change, lpod reloads systemd and restarts the proxy. Otherwise it reloads Caddy (`caddy reload` in `systemd-pods-proxy`), which keeps open connections up. A proxy that isn't running picks the routes up when it starts.
+- `PROXY_SCHEME` is `https` unless the proxy's environment says otherwise, such as `http` behind another proxy that handles HTTPS.
+
 ## On-demand
 
 `lpod APP ondemand enable` lets a systemd socket start an application on its first request, and lets the application and the services it needs sleep when nobody uses it. The application only names its units; lpod writes the rest:
@@ -164,6 +185,10 @@ Tools such as Pods manage a host by running these commands over SSH. With `--jso
 | `lpod APP redeploy --json [--no-block]` | `{"ok": true}`. Pulls every image the application's containers use, except ones built on the host (`localhost/...`), then restarts its main unit, or wakes it when it's on demand and asleep. With `--no-block`, a transient unit, `lpod-redeploy-APP`, does the work and logs to the journal |
 | `lpod APP secret add NAME --type env\|mount --target TARGET --json` | `{"ok": true}`. Writes the drop-in `lpod-secret-NAME.conf` for the application's main container, next to its Quadlet |
 | `lpod APP ondemand enable --json --port PORT --app-port PORT [...]` | `{"ok": true}`. Lets a socket start the application on its first request, and its units sleep when idle. See [On-demand](#on-demand) for the options |
+| `lpod APP routes --json` | `routes`: the application's routes (see [Routes](#routes)), each with its `role`, `host`, `upstream`, whether it's the `main` one, and its `target`: the upstream, or the on-demand socket for the main route of an on-demand application |
+| `lpod APP routes set --stdin --json` | `{"ok": true}`. Replaces the application's routes with `{"routes": [{"role", "host", "upstream", "main"}]}` on stdin, and applies them. An empty list removes them |
+| `lpod APP routes remove --json` | `{"ok": true}`. Removes the application's routes |
+| `lpod proxy routes --json` | `proxy` (`installed` and `running`) and `routes`: every application's routes, each with its `application` |
 | `lpod APP ondemand disable --json` | `{"ok": true}`. Removes what `enable` wrote, and starts the application again |
 | `lpod APP ondemand status --json` | `ondemand`: whether it's `enabled`, whether the socket is `listening`, whether the app is `awake` (its main unit runs), and the settings it was enabled with: `port`, `local_port`, `app_port`, `listen` (`null` for every address), `idle_timeout`, `workers`, `idle_check` (`container`, `user` and `command`, or `null`) and `schedule` (`container`, `at` and `environment`, or `null`). They're `null` (`workers` empty) when it's off |
 | `lpod secret rm NAME [--json]` | `{"ok": true}` |
