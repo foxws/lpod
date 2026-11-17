@@ -2,6 +2,7 @@
     "contract": 1,
     "commit": "a41f9c2",
     "manifest": "version: 1\nname: nextcloud\ndescription: Files, calendars and contacts\n\nsources:\n  stable:\n    path: nextcloud\n    description: Nextcloud with PostgreSQL\n  testing:\n    path: nextcloud-testing\n    description: The next major release\n\nsecrets:\n  nextcloud-admin-password:\n    description: Password of the admin account\n  nextcloud-db-password:\n    description: Password of the database user\n    generate: true\n  smtp-password:\n    description: Password of your mail server\n",
+    "manifest_path": "",
     "files": [
         { "name": "nextcloud.pod", "content": "[Pod]\nPodName=nextcloud\nPublishPort=8443:443\n" },
         {

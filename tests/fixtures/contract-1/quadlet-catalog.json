@@ -1,0 +1,9 @@
+{
+    "contract": 1,
+    "commit": "5e0b7d1",
+    "applications": [
+        { "path": "jellyfin", "manifest": "# How Pods (https://github.com/foxws/pods) offers and installs this application.\nversion: 1\nname: jellyfin\nlabel: Jellyfin\ndescription: Media server for your films, series and music\nauthor: francoism90\nicon: i-lucide-clapperboard\ncategory: Media\nwebsite: https://jellyfin.org\nrepository: https://github.com/jellyfin/jellyfin\nnotes: Binds ~/Media from the host (change Device= in jellyfin-media.volume; the directory must exist) and uses the GPU at /dev/dri. Listens on 127.0.0.1:8096.\n" },
+        { "path": "mariadb", "manifest": "# How Pods (https://github.com/foxws/pods) offers and installs this application.\nversion: 1\nname: mariadb\nlabel: MariaDB\ndescription: Relational database compatible with MySQL, version 11.8 LTS\nauthor: foxws\nicon: i-lucide-database\ncategory: Databases\nwebsite: https://mariadb.org\nrepository: https://github.com/MariaDB/server\nnotes: Other applications reach it as mariadb on the systemd-mariadb network. The development source also listens on 127.0.0.1:3306.\n\nsources:\n  production:\n    path: production\n    description: Root password from a secret, reachable only on its network\n  development:\n    path: development\n    description: Root without a password, listening on 127.0.0.1:3306\n\nsecrets:\n  mariadb-root-password:\n    description: Password of the MariaDB root user\n    generate: true\n" },
+        { "path": "scratch", "manifest": "version: 2\nname: scratch\n" }
+    ]
+}
