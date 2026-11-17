@@ -1,7 +1,19 @@
 {
     "contract": 1,
     "routes": [
-        { "role": "app", "host": "stry.home.arpa", "upstream": "systemd-stry:8000", "main": true, "target": "host.containers.internal:8000" },
-        { "role": "websockets", "host": "ws.stry.home.arpa", "upstream": "systemd-stry-reverb:6001", "main": false, "target": "systemd-stry-reverb:6001" }
+        {
+            "role": "app",
+            "host": "stry.home.arpa",
+            "upstream": "systemd-stry:8000",
+            "main": true,
+            "target": "host.containers.internal:8000"
+        },
+        {
+            "role": "websockets",
+            "host": "ws.stry.home.arpa",
+            "upstream": "systemd-stry-reverb:6001",
+            "main": false,
+            "target": "systemd-stry-reverb:6001"
+        }
     ]
 }
