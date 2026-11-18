@@ -173,7 +173,7 @@ function display_help {
     echo "  ${GREEN}lpod doctor [--json]${NC}            Check the host for what the services need, and how to fix what's missing"
     echo
     echo "${YELLOW}Updating:${NC}"
-    echo "  ${GREEN}lpod self-update [VERSION]${NC}      Upgrade lpod in place (latest, or e.g. v2.2.0)"
+    echo "  ${GREEN}lpod self-update [VERSION]${NC}      Upgrade lpod in place (latest, a release such as v2.2.0, or a branch such as main) [--json]"
     echo "  ${GREEN}lpod --version${NC}                  Show the installed version"
 
     exit 1
@@ -287,27 +287,81 @@ function unit_is_active {
 }
 
 # Re-runs the installer for this copy of lpod, so it upgrades in place
-# (used by "lpod self-update [VERSION]"). The installer verifies the
-# downloads against the release's SHA256SUMS...
+# ("lpod self-update [VERSION|BRANCH] [--json]"). VERSION is a release
+# (latest by default), whose downloads the installer verifies against its
+# SHA256SUMS; anything else is a branch of the repository, such as main, to
+# test what isn't released yet. The installer is downloaded before it runs,
+# so a release or branch that doesn't exist fails instead of running an
+# empty script. With --json, the installer's output goes to stderr, and the
+# new lpod prints its "version --json"...
 function cmd_self_update {
-    local TARGET="${1:-latest}"
-    local INSTALLER="https://github.com/foxws/lpod/releases/latest/download/install.sh"
-    local INSTALL_DIR
-    INSTALL_DIR="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
+    local TARGET="" JSON=false ARG
 
-    if [ "$TARGET" != "latest" ]; then
-        INSTALLER="https://github.com/foxws/lpod/releases/download/v${TARGET#v}/install.sh"
+    for ARG in "$@"; do
+        case "$ARG" in
+            --json) JSON=true ;;
+            -*) echo "Unknown option: $ARG" >&2; return 1 ;;
+            *) TARGET="$ARG" ;;
+        esac
+    done
+
+    TARGET="${TARGET:-latest}"
+
+    local INSTALLER BRANCH=""
+    local REPOSITORY="https://github.com/foxws/lpod"
+
+    if [ "$TARGET" == "latest" ]; then
+        INSTALLER="${REPOSITORY}/releases/latest/download/install.sh"
+    elif [[ "$TARGET" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?$ ]]; then
+        INSTALLER="${REPOSITORY}/releases/download/v${TARGET#v}/install.sh"
+    elif [[ "$TARGET" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]{0,99}$ ]] && [[ "$TARGET" != *..* ]]; then
+        BRANCH="$TARGET"
+        INSTALLER="https://raw.githubusercontent.com/foxws/lpod/${BRANCH}/install.sh"
+    else
+        echo "${TARGET} is neither a release (such as v4.0.0) nor a branch." >&2
+
+        return 1
     fi
 
+    local INSTALL_DIR STAGING
+    INSTALL_DIR="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
+    STAGING="$(mktemp)" || return 1
+
+    # shellcheck disable=SC2064
+    trap "rm -f '${STAGING}'" RETURN
+
     if command -v curl >/dev/null 2>&1; then
-        curl -fsSL "$INSTALLER" | LPOD_INSTALL_DIR="$INSTALL_DIR" LPOD_VERSION="$TARGET" bash
+        curl -fsSL --retry 3 -o "$STAGING" "$INSTALLER" 2>/dev/null
     elif command -v wget >/dev/null 2>&1; then
-        wget -qO- "$INSTALLER" | LPOD_INSTALL_DIR="$INSTALL_DIR" LPOD_VERSION="$TARGET" bash
+        wget -q -O "$STAGING" "$INSTALLER"
     else
         echo "Neither curl nor wget is installed." >&2
 
         return 1
     fi
+
+    # shellcheck disable=SC2181
+    if [ $? -ne 0 ] || [ ! -s "$STAGING" ]; then
+        if [ -n "$BRANCH" ]; then
+            echo "Could not download lpod from the branch ${BRANCH}: there's no such branch." >&2
+        else
+            echo "Could not download lpod ${TARGET}: there's no such release." >&2
+        fi
+
+        return 1
+    fi
+
+    local INSTALL=(env LPOD_INSTALL_DIR="$INSTALL_DIR" LPOD_VERSION="$TARGET" LPOD_BRANCH="$BRANCH" bash "$STAGING")
+
+    if [ "$JSON" == true ]; then
+        "${INSTALL[@]}" >&2 < /dev/null || return 1
+
+        "${INSTALL_DIR}/lpod" version --json
+
+        return
+    fi
+
+    "${INSTALL[@]}"
 }
 
 # Prints a string as a JSON string, escaping what JSON doesn't allow as is...

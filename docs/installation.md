@@ -23,6 +23,7 @@ The installer:
 | Variable | Default | Description |
 | --- | --- | --- |
 | `LPOD_VERSION` | `latest` | The release to install, e.g. `v2.2.0` |
+| `LPOD_BRANCH` | | A branch to install instead of a release, e.g. `main` |
 | `LPOD_INSTALL_DIR` | `~/.local/bin`, or `/usr/local/bin` as root | Where to install the scripts |
 
 ## Upgrading
@@ -30,9 +31,10 @@ The installer:
 ```sh
 lpod self-update            # the latest release
 lpod self-update v2.2.0     # or a specific one
+lpod self-update main       # or a branch, to try what isn't released yet
 ```
 
-`self-update` runs the installer again for the `lpod` you're running, so it upgrades in place. Running the `curl` command again does the same.
+`self-update` runs the installer again for the `lpod` you're running, so it upgrades in place. A branch isn't checked against checksums, and `lpod --version` then says `dev-BRANCH`. Each user has their own `lpod` in `~/.local/bin`, so run it as the user whose services it manages; Pods does that for you with **Update lpod** on a host's settings page. Running the `curl` command again does the same.
 
 ## Uninstalling
 

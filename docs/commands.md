@@ -337,7 +337,7 @@ The ids are `podman`, `jq`, `systemd`, `linger`, `subids`, `ports`, `proxy-certi
 
 | Command                      | Description                                                         |
 | ----------------------------- | -------------------------------------------------------------------- |
-| `lpod self-update [VERSION]` | Upgrade `lpod` in place, to the latest or the given release |
+| `lpod self-update [VERSION\|BRANCH] [--json]` | Upgrade `lpod` in place: to the latest release, a given one (`v4.0.0`), or a branch (`main`, unverified, reported as `dev-main`). It fails when there's no such release or branch. With `--json`, the installer's output goes to stderr and the new `lpod` prints its `version --json` |
 | `lpod --version`             | Show the installed version                                          |
 
 > **Warning:** `remove` and `uninstall` delete the Podman volumes owned by the services they remove. This cannot be undone.
