@@ -1,0 +1,20 @@
+{
+    "contract": 1,
+    "timers": [
+        {
+            "name": "retrieve",
+            "unit": "spotweb-retrieve.timer",
+            "container": "spotweb-retrieve",
+            "service": "spotweb-retrieve.service",
+            "on_calendar": ["hourly"],
+            "persistent": true,
+            "randomized_delay_sec": "5min",
+            "timeout_start_sec": "infinity",
+            "enabled": true,
+            "running": false,
+            "next_run": "2026-11-18T16:00:00+00:00",
+            "last_run": "2026-11-18T15:02:41+00:00",
+            "last_result": "success"
+        }
+    ]
+}
