@@ -4090,8 +4090,10 @@ function cmd_quadlet_check {
         SCOPE_ARGS=(-user)
     fi
 
-    # The generator logs "Loading source unit file PATH" for every file it
-    # reads (Podman 6.1 does so without -v), so those lines aren't problems.
+    # The generator logs "Loading source unit file PATH" and "Loading source
+    # drop-in file PATH" for every file it reads (Podman 6.1 does so without
+    # -v), so those lines aren't problems. A drop-in's path names its unit
+    # (spotweb.container.d/lpod-ondemand.conf), so it would count as one.
     local OUTPUT ERRORS
     OUTPUT="$(QUADLET_UNIT_DIRS="${WORK}:$(quadlet_unit_path)" "$GENERATOR" -dryrun "${SCOPE_ARGS[@]}" 2> "${WORK}/.errors")"
     ERRORS="$(cat "${WORK}/.errors")"
@@ -4106,7 +4108,7 @@ function cmd_quadlet_check {
         --rawfile errors <(printf '%s' "$ERRORS") '
         $names[0] as $names |
         ($names | map(sub("\\.[^.]+$"; ""))) as $bases
-        | ($errors | split("\n") | map(select(. != "")) | map(sub("^quadlet-generator\\[[0-9]+\\]: "; "")) | map(select(test("^Loading source unit file ") | not)) | map(select(. as $line | any($names[]; . as $name | $line | contains($name))))) as $problems
+        | ($errors | split("\n") | map(select(. != "")) | map(sub("^quadlet-generator\\[[0-9]+\\]: "; "")) | map(select(test("^Loading source (unit|drop-in) file ") | not)) | map(select(. as $line | any($names[]; . as $name | $line | contains($name))))) as $problems
         | ($output | split("\n") | map(capture("^---(?<unit>.+)---$").unit // empty) | map(select(. as $unit | any($bases[]; . as $base | $unit | startswith($base))))) as $units
         | {contract: $contract, valid: ($problems | length == 0), errors: $problems, units: $units}'
 }
