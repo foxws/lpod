@@ -2165,7 +2165,7 @@ function routes_apply {
 # "lpod APP routes [set --stdin|remove] --json": the hostnames the Pods proxy
 # sends to an application. "set" replaces them with {"routes": [{"role",
 # "host", "upstream", "main"}]} from stdin, where upstream is a container
-# and port (systemd-stry:8000). The first route is the main one unless
+# and port (systemd-hello:8000). The first route is the main one unless
 # another says "main": true...
 function cmd_app_routes {
     local APPLICATION="$1"
@@ -4093,7 +4093,7 @@ function cmd_quadlet_check {
     # The generator logs "Loading source unit file PATH" and "Loading source
     # drop-in file PATH" for every file it reads (Podman 6.1 does so without
     # -v), so those lines aren't problems. A drop-in's path names its unit
-    # (spotweb.container.d/lpod-ondemand.conf), so it would count as one.
+    # (hello.container.d/lpod-ondemand.conf), so it would count as one.
     local OUTPUT ERRORS
     OUTPUT="$(QUADLET_UNIT_DIRS="${WORK}:$(quadlet_unit_path)" "$GENERATOR" -dryrun "${SCOPE_ARGS[@]}" 2> "${WORK}/.errors")"
     ERRORS="$(cat "${WORK}/.errors")"

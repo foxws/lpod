@@ -137,9 +137,9 @@ The Pods proxy (`pods-proxy`, a Caddy Quadlet; see Pods' README) sends hostnames
 | `handlers` | The Caddyfile has `import sites/*.caddy` inside a wildcard site (`*.home.example.com { … }`), with one certificate through a DNS challenge | `sites/APP.caddy`: a matcher and a `handle` per route, inside that site |
 
 ```caddy
-# sites/stry.caddy in the handlers layout
-@stry host stry.home.example.com stry-ws.home.example.com
-handle @stry {
+# sites/hello.caddy in the handlers layout
+@hello host hello.home.example.com hello-ws.home.example.com
+handle @hello {
 	reverse_proxy host.containers.internal:8000 {
 		stream_close_delay 5m
 	}
@@ -150,28 +150,28 @@ The routes file's `# lpod-routes:` line holds the routes as given. `pods-proxy.c
 
 ```bash
 echo '{"routes": [
-    {"role": "app", "host": "stry.home.arpa", "upstream": "systemd-stry:8000"},
-    {"role": "ws", "host": "stry-ws.home.arpa", "upstream": "systemd-stry-reverb:6001", "via": "main"},
-    {"role": "mail", "host": "stry-mail.home.arpa", "upstream": "systemd-stry-mailpit:8025"}
-]}' | lpod stry routes set --stdin --json
+    {"role": "app", "host": "hello.home.arpa", "upstream": "systemd-hello:8000"},
+    {"role": "ws", "host": "hello-ws.home.arpa", "upstream": "systemd-hello-reverb:6001", "via": "main"},
+    {"role": "mail", "host": "hello-mail.home.arpa", "upstream": "systemd-hello-mailpit:8025"}
+]}' | lpod hello routes set --stdin --json
 ```
 
-- A `role` names the route (`app`, `ws`), a `host` is a hostname, and an `upstream` is a container and port. Hosts and roles are unique, and hosts are kept in lowercase. In the `handlers` layout, a host must be one label under the wildcard domain (`stry-ws.home.example.com`, not `ws.stry.home.example.com`), since that's all the certificate covers.
+- A `role` names the route (`app`, `ws`), a `host` is a hostname, and an `upstream` is a container and port. Hosts and roles are unique, and hosts are kept in lowercase. In the `handlers` layout, a host must be one label under the wildcard domain (`hello-ws.home.example.com`, not `ws.hello.home.example.com`), since that's all the certificate covers.
 - The first route is the main one unless another says `"main": true`. While the application is on demand, its main route goes to its socket (`host.containers.internal:PORT`), so a request wakes it. `ondemand enable` and `disable` rewrite it. The socket must listen on an address the proxy container reaches, so not `--listen 127.0.0.1`.
-- A route with `"via": "main"` goes where the main route goes, and shares its site or matcher, for applications that route their own hostnames (such as stry, whose own Caddy forwards to Reverb and RustFS). Such routes wake a sleeping application too. The others go to their containers, and get a 502 while the application sleeps.
+- A route with `"via": "main"` goes where the main route goes, and shares its site or matcher, for applications that route their own hostnames (such as a Laravel application whose own Caddy forwards to Reverb). Such routes wake a sleeping application too. The others go to their containers, and get a 502 while the application sleeps.
 - Every `reverse_proxy` keeps WebSocket connections open for 5 minutes after a reload (`stream_close_delay 5m`), since lpod reloads Caddy whenever routes change.
 - When the networks the proxy joins change, lpod reloads systemd and restarts the proxy. Otherwise it reloads Caddy (`caddy reload` in `systemd-pods-proxy`, through the admin socket when the Caddyfile says `admin unix//…`), which keeps open connections up. A proxy that isn't running picks the routes up when it starts.
 - `PROXY_SCHEME` is `https` unless the proxy's environment says otherwise, such as `http` behind another proxy that handles HTTPS. The `handlers` layout uses the wildcard site's scheme.
 
 ## Timers
 
-`lpod APP timers set` starts containers of an application on a schedule, such as a job that fetches new data every hour. The application names the container and the schedule; lpod writes a systemd timer for it, `APP-NAME.timer` (so `systemctl --user list-timers` shows where it came from), which starts the container's service.
+`lpod APP timers set` starts containers of an application on a schedule, such as Nextcloud's background job every 5 minutes. The application names the container and the schedule; lpod writes a systemd timer for it, `APP-NAME.timer` (so `systemctl --user list-timers` shows where it came from), which starts the container's service.
 
 ```bash
 echo '{"timers": [
-    {"name": "retrieve", "container": "spotweb-retrieve", "on_calendar": "hourly",
-     "persistent": true, "randomized_delay_sec": "5min", "timeout_start_sec": "infinity"}
-]}' | lpod spotweb timers set --stdin --json
+    {"name": "cron", "container": "nextcloud-cron", "on_calendar": "*:0/5",
+     "persistent": true, "randomized_delay_sec": "30s", "timeout_start_sec": "10min"}
+]}' | lpod nextcloud timers set --stdin --json
 ```
 
 | Key | Directive | Description |
@@ -181,7 +181,7 @@ echo '{"timers": [
 | `on_calendar` | `OnCalendar=` | A calendar event (`hourly`, `*-*-* 02:00`, see systemd.time(7)), or a list of them |
 | `persistent` | `Persistent=` | Run once at boot when the host was off at a due time |
 | `randomized_delay_sec` | `RandomizedDelaySec=` | Wait up to this long after the due time, so hosts don't all start at once |
-| `timeout_start_sec` | `TimeoutStartSec=` | How long the container may take, in a `lpod-timer.conf` drop-in for it, such as `infinity` for a oneshot job that can take hours |
+| `timeout_start_sec` | `TimeoutStartSec=` | How long the container may take, in a `lpod-timer.conf` drop-in for it, such as `10min`, or `infinity` for a oneshot job that can take hours |
 
 The container should run once and exit: `Type=oneshot` in its `[Service]`, no `[Install]` section (so it doesn't also start at boot), and `HealthCmd=none`. It starts the services it `Requires=`, so a timer also wakes an application that's [on demand](#on-demand) and asleep, which sleeps again after its idle timeout.
 
@@ -202,12 +202,12 @@ Setting the timers replaces the ones the application had, and an empty list remo
 Starting the main unit on its own doesn't work once it has `StopWhenUnneeded=yes`: nothing needs it, so systemd stops it again. `lpod APP up` therefore starts `APP-ondemand.service` instead, the same way a request does, and the app sleeps again after `--idle-timeout` without connections. `restart` and `redeploy` do the same while the app sleeps, and restart it (and the proxy with it) while it's awake. `lpod APP down` stops it, and the next request wakes it.
 
 ```bash
-lpod stry ondemand enable --json \
+lpod hello ondemand enable --json \
     --port 8000 --app-port 8000 \
-    --worker stry-horizon \
-    --idle-container stry-horizon --idle-user docker \
+    --worker hello-horizon \
+    --idle-container hello-horizon --idle-user docker \
     --idle-command "php -d variables_order=EGPCS /app/artisan app:idle" \
-    --schedule stry-schedule --schedule-at "*:00" --schedule-at 02:00 \
+    --schedule hello-schedule --schedule-at "*:00" --schedule-at 02:00 \
     --schedule-env "APP_COMMAND=php -d variables_order=EGPCS /app/artisan schedule:run"
 ```
 
