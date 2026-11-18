@@ -163,6 +163,30 @@ echo '{"routes": [
 - When the networks the proxy joins change, lpod reloads systemd and restarts the proxy. Otherwise it reloads Caddy (`caddy reload` in `systemd-pods-proxy`, through the admin socket when the Caddyfile says `admin unix//…`), which keeps open connections up. A proxy that isn't running picks the routes up when it starts.
 - `PROXY_SCHEME` is `https` unless the proxy's environment says otherwise, such as `http` behind another proxy that handles HTTPS. The `handlers` layout uses the wildcard site's scheme.
 
+## Timers
+
+`lpod APP timers set` starts containers of an application on a schedule, such as a job that fetches new data every hour. The application names the container and the schedule; lpod writes a systemd timer for it, `APP-NAME.timer` (so `systemctl --user list-timers` shows where it came from), which starts the container's service.
+
+```bash
+echo '{"timers": [
+    {"name": "retrieve", "container": "spotweb-retrieve", "on_calendar": "hourly",
+     "persistent": true, "randomized_delay_sec": "5min", "timeout_start_sec": "infinity"}
+]}' | lpod spotweb timers set --stdin --json
+```
+
+| Key | Directive | Description |
+| --- | --- | --- |
+| `name` | | Names the timer: `APP-NAME.timer`. Lowercase letters, digits, `-` and `_`. `idle` is taken by [on-demand](#on-demand) |
+| `container` | `Unit=` | A container Quadlet of the application, without `.container`. Each container has at most one timer |
+| `on_calendar` | `OnCalendar=` | A calendar event (`hourly`, `*-*-* 02:00`, see systemd.time(7)), or a list of them |
+| `persistent` | `Persistent=` | Run once at boot when the host was off at a due time |
+| `randomized_delay_sec` | `RandomizedDelaySec=` | Wait up to this long after the due time, so hosts don't all start at once |
+| `timeout_start_sec` | `TimeoutStartSec=` | How long the container may take, in a `lpod-timer.conf` drop-in for it, such as `infinity` for a oneshot job that can take hours |
+
+The container should run once and exit: `Type=oneshot` in its `[Service]`, no `[Install]` section (so it doesn't also start at boot), and `HealthCmd=none`. It starts the services it `Requires=`, so a timer also wakes an application that's [on demand](#on-demand) and asleep, which sleeps again after its idle timeout.
+
+Setting the timers replaces the ones the application had, and an empty list removes them. The settings are kept on each timer's `# lpod-timer:` line, so don't edit it by hand: run `set` again instead. `lpod APP timers run NAME` starts the container now, without waiting for it, and `lpod APP remove` removes the timers with the application.
+
 ## On-demand
 
 `lpod APP ondemand enable` lets a systemd socket start an application on its first request, and lets the application and the services it needs sleep when nobody uses it. The application only names its units; lpod writes the rest:
@@ -227,6 +251,10 @@ Tools such as Pods manage a host by running these commands over SSH. With `--jso
 | `lpod APP routes --json` | `routes`: the application's routes (see [Routes](#routes)), each with its `role`, `host`, `upstream`, whether it's the `main` one, and its `target`: the upstream, or the on-demand socket for the main route of an on-demand application |
 | `lpod APP routes set --stdin --json` | `{"ok": true}`. Replaces the application's routes with `{"routes": [{"role", "host", "upstream", "main", "via"}]}` on stdin, and applies them. An empty list removes them |
 | `lpod APP routes remove --json` | `{"ok": true}`. Removes the application's routes |
+| `lpod APP timers --json` | `timers`: the application's timers (see [Timers](#timers)), each with its `name`, `unit` (`APP-NAME.timer`), `container`, `service`, the settings it was set with (`on_calendar` as a list, `persistent`, `randomized_delay_sec`, `timeout_start_sec`, `null` when not given), whether it's `enabled`, whether its container is `running`, its `next_run` and `last_run`, and the `last_result` of the container's service (`success`, `exit-code`, …, or `null` before the first run and while it runs) |
+| `lpod APP timers set --stdin --json` | `{"ok": true}`. Replaces the application's timers with `{"timers": [{"name", "container", "on_calendar", "persistent", "randomized_delay_sec", "timeout_start_sec"}]}` on stdin, and enables them. An empty list removes them |
+| `lpod APP timers remove --json` | `{"ok": true}`. Removes the application's timers |
+| `lpod APP timers run NAME --json` | `{"ok": true}`. Starts the container of the timer `NAME` now, without waiting for it |
 | `lpod proxy routes --json` | `proxy` (`installed`, `running`, the `layout` of its Caddyfile, `sites` or `handlers`, and the wildcard `domain` in the `handlers` layout) and `routes`: every application's routes, each with its `application` |
 | `lpod proxy settings --json` | `proxy` (`installed`, `running`), `settings` (see [Proxy](#proxy)): whether lpod wrote the Caddyfile (`managed`; if not, the settings are read from it as far as they can be), `mode`, `email`, `domain`, `dns_provider`, `resolvers`, `image` (`null` for the mode's own), `http_port` and `https_port` (as published, or `null`), and whether a `dns_token` is there; `host` (`scope`, and `unprivileged_port_start` when rootless) |
 | `lpod proxy settings set --stdin --json` | `{"ok": true, "backup": PATH}`, where `backup` is the hand-written Caddyfile it replaced, or `null`. Takes the settings on stdin |
