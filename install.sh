@@ -9,8 +9,10 @@
 #
 #   curl -fsSL https://github.com/foxws/lpod/releases/latest/download/install.sh | bash -s -- --uninstall
 #
-# LPOD_VERSION pins a release (e.g. v2.2.0), LPOD_INSTALL_DIR changes where
-# the scripts go (default ~/.local/bin, or /usr/local/bin as root).
+# LPOD_VERSION pins a release (e.g. v2.2.0), LPOD_BRANCH installs a branch
+# instead (e.g. main, unverified, reporting its version as dev-BRANCH), and
+# LPOD_INSTALL_DIR changes where the scripts go (default ~/.local/bin, or
+# /usr/local/bin as root).
 #
 # Everything runs from "main" on the last line, so a download cut off
 # halfway through "curl | bash" never runs a partial script...
@@ -19,6 +21,11 @@ set -euo pipefail
 
 REPOSITORY="https://github.com/foxws/lpod"
 VERSION="${LPOD_VERSION:-latest}"
+BRANCH="${LPOD_BRANCH:-}"
+
+if [ -n "$BRANCH" ]; then
+    VERSION="$BRANCH"
+fi
 FILES=(lpod)
 
 if [ "$(id -u)" -eq 0 ]; then
@@ -57,7 +64,9 @@ function has_systemd_session {
 function download_url {
     local NAME="$1"
 
-    if [ "$VERSION" == "latest" ]; then
+    if [ -n "$BRANCH" ]; then
+        echo "https://raw.githubusercontent.com/foxws/lpod/${BRANCH}/bin/${NAME}"
+    elif [ "$VERSION" == "latest" ]; then
         echo "${REPOSITORY}/releases/latest/download/${NAME}"
     else
         echo "${REPOSITORY}/releases/download/v${VERSION#v}/${NAME}"
@@ -86,6 +95,12 @@ function verify {
     local FILE="$2"
     local SUMS="$3"
     local EXPECTED ACTUAL
+
+    if [ -n "$BRANCH" ]; then
+        warn "A branch has no SHA256SUMS, so ${NAME} from ${BRANCH} isn't verified."
+
+        return 0
+    fi
 
     if [ ! -s "$SUMS" ]; then
         warn "This release has no SHA256SUMS, so ${NAME} can't be verified."
@@ -142,12 +157,19 @@ function do_install {
 
     # Download and verify everything before replacing anything, so a failed
     # download or checksum leaves a working install as it was...
-    fetch SHA256SUMS "${STAGING}/SHA256SUMS" 2>/dev/null || rm -f "${STAGING}/SHA256SUMS"
+    if [ -z "$BRANCH" ]; then
+        fetch SHA256SUMS "${STAGING}/SHA256SUMS" 2>/dev/null || rm -f "${STAGING}/SHA256SUMS"
+    fi
 
     for NAME in "${FILES[@]}"; do
         fetch "$NAME" "${STAGING}/${NAME}" || fail "Could not download ${NAME} (${VERSION})."
         verify "$NAME" "${STAGING}/${NAME}" "${STAGING}/SHA256SUMS"
     done
+
+    # A release has its version baked in; a branch says which branch it is...
+    if [ -n "$BRANCH" ]; then
+        sed -i "s/^LPOD_VERSION=\"dev\"\$/LPOD_VERSION=\"dev-${BRANCH//\//-}\"/" "${STAGING}/lpod"
+    fi
 
     mkdir -p "$INSTALL_DIR"
 
