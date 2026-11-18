@@ -3,28 +3,28 @@
     "proxy": { "installed": true, "running": true, "layout": "sites", "domain": null },
     "routes": [
         {
-            "application": "stry",
+            "application": "hello",
             "role": "app",
-            "host": "stry.home.arpa",
-            "upstream": "systemd-stry:8000",
+            "host": "hello.home.arpa",
+            "upstream": "systemd-hello:8000",
             "main": true,
             "via": null,
             "target": "host.containers.internal:8000"
         },
         {
-            "application": "stry",
+            "application": "hello",
             "role": "websockets",
-            "host": "ws.stry.home.arpa",
-            "upstream": "systemd-stry-reverb:6001",
+            "host": "ws.hello.home.arpa",
+            "upstream": "systemd-hello-reverb:6001",
             "main": false,
             "via": null,
-            "target": "systemd-stry-reverb:6001"
+            "target": "systemd-hello-reverb:6001"
         },
         {
-            "application": "stry",
+            "application": "hello",
             "role": "s3",
-            "host": "s3.stry.home.arpa",
-            "upstream": "systemd-stry-rustfs:9000",
+            "host": "s3.hello.home.arpa",
+            "upstream": "systemd-hello-rustfs:9000",
             "main": false,
             "via": "main",
             "target": "host.containers.internal:8000"
