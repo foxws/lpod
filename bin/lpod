@@ -2074,12 +2074,18 @@ function routes_caddy {
     '
 }
 
-# Reloads the proxy's Caddy, through its admin socket when it has one...
+# Reloads the proxy's Caddy, through its admin socket when it has one. Caddy
+# logs every reload on stderr ("using config from file"), which only matters
+# when the reload fails, so that's the only time it's shown...
 function proxy_reload {
-    local ADDRESS
+    local ADDRESS OUTPUT
     ADDRESS="$(proxy_admin_address)"
 
-    "${LPOD_PODMAN_BINARY:-podman}" exec systemd-pods-proxy caddy reload --config /etc/caddy/Caddyfile ${ADDRESS:+--address "$ADDRESS"} > /dev/null
+    if ! OUTPUT="$("${LPOD_PODMAN_BINARY:-podman}" exec systemd-pods-proxy caddy reload --config /etc/caddy/Caddyfile ${ADDRESS:+--address "$ADDRESS"} 2>&1 > /dev/null)"; then
+        printf '%s\n' "$OUTPUT" >&2
+
+        return 1
+    fi
 }
 
 # Writes the routes file of an application in the current layout, or removes
