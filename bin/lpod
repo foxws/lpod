@@ -2038,7 +2038,11 @@ function routes_settings {
 
 # The routes of APP_NAME with the upstream each one really goes to: the main
 # route of an on-demand application goes to its socket on the host, so a
-# request wakes it, and a route "via": "main" goes where the main route goes...
+# request wakes it, and a route "via": "main" goes where the main route goes.
+# A socket on a loopback address (ondemand enable --listen 127.0.0.1) can't
+# be reached from the proxy container, so the main route then goes to the
+# container instead: it works while the application is awake, and gets a
+# 502 while it sleeps...
 function routes_with_targets {
     local APP_NAME="$1" ROUTES="$2"
     local ONDEMAND
@@ -2046,7 +2050,8 @@ function routes_with_targets {
 
     jq --argjson ondemand "${ONDEMAND:-null}" '
         (first(.[] | select(.main)) // null) as $main
-        | (if $main == null then null elif $ondemand != null then "host.containers.internal:\($ondemand.port)" else $main.upstream end) as $main_target
+        | ($ondemand != null and (($ondemand.listen // "") | test("^(127\\.|::1$)"))) as $loopback
+        | (if $main == null then null elif $ondemand != null and ($loopback | not) then "host.containers.internal:\($ondemand.port)" else $main.upstream end) as $main_target
         | map(. + {via: (.via // null)})
         | map(. + {target: (if .main or .via == "main" then $main_target else .upstream end)})
     ' <<< "$ROUTES"
