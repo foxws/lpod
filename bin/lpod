@@ -3830,7 +3830,7 @@ function cmd_volumes_json {
         def directive($content; $key): $content | split("\n") | map(select(startswith($key + "=")) | ltrimstr($key + "=") | sub("\\s+$"; "")) | last;
         def app_of($name): first($containers[] | select(.name == $name) | .application) // null;
         ($units | map(select(.ext == "volume")) | map({name: (directive(source(.Name); "VolumeName") // "systemd-\(.base)"), quadlet: .Name})) as $volume_units
-        | ($units | map(select(.ext == "container")) | map(.Name as $quadlet | source(.Name) | split("\n") | map(select(startswith("Volume=")) | ltrimstr("Volume=") | split(":")[0] | select(test("^[A-Za-z0-9][A-Za-z0-9_.-]*$") and (endswith(".volume") | not)) | {name: ., quadlet: $quadlet})) | add // []) as $inline
+        | ($units | map(select(.ext == "container")) | map(.Name as $quadlet | source(.Name) | split("\n") | map(select(startswith("Volume=")) | ltrimstr("Volume=") | split(":")[0] // "" | select(test("^[A-Za-z0-9][A-Za-z0-9_.-]*$") and (endswith(".volume") | not)) | {name: ., quadlet: $quadlet})) | add // []) as $inline
         | ($inspect | map(.Name as $container | (.Mounts // [])[] | {container: $container, type: .Type, name: .Name, source: .Source})) as $mounts
         | def users(f): [$mounts[] | select(f)] | map(.container) | unique;
         {
@@ -4459,11 +4459,11 @@ function cmd_app_remove_json {
         | ($units | map(select(.app != $app))) as $others
         | {
             volumes: ([$mine[] | select(.ext == "volume") | directive(source(.Name); "VolumeName") // "systemd-\(.base)"]
-                + [$mine[] | select(.ext == "container") | uses(.; "Volume")[] | split(":")[0] | select(test("^[A-Za-z0-9][A-Za-z0-9_.-]*$") and (endswith(".volume") | not))]) | unique,
+                + [$mine[] | select(.ext == "container") | uses(.; "Volume")[] | split(":")[0] // "" | select(test("^[A-Za-z0-9][A-Za-z0-9_.-]*$") and (endswith(".volume") | not))]) | unique,
             images: ([$mine[] | select(.ext == "container") | uses(.; "Image")[] | select(endswith(".build") or endswith(".image") | not)] | unique
                 | map(select(. as $image | [$others[] | select(.ext == "container") | uses(.; "Image")[]] | index($image) | not))),
-            secrets: ([$mine[] | select(.ext == "container") | uses(.; "Secret")[] | split(",")[0]] | unique
-                | map(select(. as $secret | [$others[] | select(.ext == "container") | uses(.; "Secret")[] | split(",")[0]] | index($secret) | not)))
+            secrets: ([$mine[] | select(.ext == "container") | uses(.; "Secret")[] | split(",")[0] // empty] | unique
+                | map(select(. as $secret | [$others[] | select(.ext == "container") | uses(.; "Secret")[] | split(",")[0] // empty] | index($secret) | not)))
         }')"
 
     # Its timers go first, while their containers' drop-ins are still known...
