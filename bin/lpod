@@ -158,6 +158,7 @@ function display_help {
     echo "  ${GREEN}lpod image pull REF|rm ID --json${NC}        Pull or remove an image"
     echo "  ${GREEN}lpod auto-update --dry-run --json${NC}       Check the registries for image updates"
     echo "  ${GREEN}lpod volumes|networks [prune] --json${NC}    Volumes or networks, or remove the unused ones"
+    echo "  ${GREEN}lpod volumes sizes --json${NC}               The disk space each named volume uses (walks every file)"
     echo "  ${GREEN}lpod volume|network rm NAME --json${NC}      Remove a volume or network"
     echo "  ${GREEN}lpod volume export NAME --json${NC}          Write a volume to stdout as a tar archive ([--stop] its applications meanwhile)"
     echo "  ${GREEN}lpod journal --json${NC}                     The journal of every Quadlet unit ([--lines N] [--since T|boot] [--priority N])"
@@ -3807,6 +3808,47 @@ function cmd_events_json {
         | {contract: $contract, events: .}' <<< "$EVENTS"
 }
 
+# "lpod volumes sizes --json": the disk space each named and anonymous volume
+# uses, in bytes. It walks every file of every volume, so it can take a while
+# on big ones, which is why "volumes" leaves size null and callers ask for
+# this on its own. Volumes backed by a folder, a device or an NFS share (a
+# "device" option) are left out: they can be a whole media library, or remote.
+# A rootless user's volumes hold files owned by its subordinate IDs, which
+# only "podman unshare" can read all of.
+function cmd_volumes_sizes_json {
+    require_jq
+
+    local PODMAN="${LPOD_PODMAN_BINARY:-podman}"
+    local VOLUMES
+    VOLUMES="$("$PODMAN" volume inspect --all)" || return 1
+
+    local LOCAL
+    LOCAL="$(jq -c '[.[] | select((.Driver // "local") == "local" and (.Options.device // "") == "" and (.Mountpoint // "") != "") | {name: .Name, path: .Mountpoint}]' <<< "$VOLUMES")" || return 1
+
+    local -a PATHS
+    mapfile -t PATHS < <(jq -r '.[].path' <<< "$LOCAL")
+
+    # du still prints the totals it could work out when it can't read some
+    # files, and exits non-zero then, so its exit code isn't a failure here.
+    local USAGE=""
+    if [ ${#PATHS[@]} -gt 0 ]; then
+        local DU=(du -s --block-size=1 --)
+
+        if [ "$(id -u)" -ne 0 ]; then
+            DU=("$PODMAN" unshare du -s --block-size=1 --)
+        fi
+
+        USAGE="$("${DU[@]}" "${PATHS[@]}" 2> /dev/null || true)"
+    fi
+
+    jq -n \
+        --argjson contract "$LPOD_CONTRACT" \
+        --argjson volumes "$LOCAL" \
+        --rawfile usage <(printf '%s' "$USAGE") '
+        ($usage | split("\n") | map(select(. != "") | capture("^(?<size>[0-9]+)\t(?<path>.+)$")) | map({(.path): (.size | tonumber)}) | add // {}) as $sizes
+        | {contract: $contract, sizes: ($volumes | map({name, size: ($sizes[.path] // null)}) | sort_by(.name))}'
+}
+
 # "lpod volumes --json"...
 function cmd_volumes_json {
     require_jq
@@ -4870,7 +4912,11 @@ if json_requested "$@" && ! app_named_like_listing "$@"; then
         image) shift; cmd_image_json "$@"; exit $? ;;
         auto-update) shift; cmd_auto_update_json "$@"; exit $? ;;
         volumes)
-            if [ "${2:-}" == "prune" ]; then cmd_volumes_prune_json; else cmd_volumes_json; fi
+            case "${2:-}" in
+                prune) cmd_volumes_prune_json ;;
+                sizes) cmd_volumes_sizes_json ;;
+                *) cmd_volumes_json ;;
+            esac
             exit $?
             ;;
         volume) shift; cmd_volume_json "$@"; exit $? ;;
