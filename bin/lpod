@@ -159,6 +159,7 @@ function display_help {
     echo "  ${GREEN}lpod auto-update --dry-run --json${NC}       Check the registries for image updates"
     echo "  ${GREEN}lpod volumes|networks [prune] --json${NC}    Volumes or networks, or remove the unused ones"
     echo "  ${GREEN}lpod volume|network rm NAME --json${NC}      Remove a volume or network"
+    echo "  ${GREEN}lpod volume export NAME --json${NC}          Write a volume to stdout as a tar archive ([--stop] its applications meanwhile)"
     echo "  ${GREEN}lpod journal --json${NC}                     The journal of every Quadlet unit ([--lines N] [--since T|boot] [--priority N])"
     echo "  ${GREEN}lpod quadlet check --stdin --json${NC}       Check Quadlet files with a dry run"
     echo "  ${GREEN}lpod quadlet install APP --stdin --json${NC} Install Quadlet files as an application ([--replace] [--start])"
@@ -3843,9 +3844,9 @@ function cmd_volumes_json {
                         name: .Name,
                         quadlet: (first($volume_units[] | select(.name == $volume.Name) | .quadlet) // first($inline[] | select(.name == $volume.Name) | .quadlet) // null),
                         driver: (.Driver // "local"),
-                        mountpoint: (if (.Options.type // "") == "nfs" then (.Options.device // .Mountpoint) else .Mountpoint end),
+                        mountpoint: (if (.Options.device // "") != "" then .Options.device else .Mountpoint end),
                         size: null,
-                        type: (if .Anonymous // false then "anonymous" elif (.Options.type // "") == "nfs" then "nfs" else "named" end),
+                        type: (if .Anonymous // false then "anonymous" elif (.Options.type // "") == "nfs" then "nfs" elif (.Options.device // "") != "" then "device" else "named" end),
                         containers: $users,
                         applications: ([$users[] | app_of(.) | select(. != null)] | unique)
                     }))
@@ -3866,12 +3867,19 @@ function cmd_volumes_json {
         }'
 }
 
-# "lpod volume rm NAME --json"...
+# "lpod volume rm NAME --json", "lpod volume export NAME [--stop] --json"...
 function cmd_volume_json {
     require_jq
 
+    if [ "${1:-}" == "export" ]; then
+        shift
+        volume_export "$@"
+
+        return
+    fi
+
     if [ "${1:-}" != "rm" ]; then
-        echo "Usage: lpod volume rm NAME --json" >&2
+        echo "Usage: lpod volume rm|export NAME --json" >&2
 
         return 1
     fi
@@ -3881,6 +3889,102 @@ function cmd_volume_json {
     "${LPOD_PODMAN_BINARY:-podman}" volume rm "$2" > /dev/null || return 1
 
     json_ok
+}
+
+# The applications "volume export --stop" stopped, which it starts again on
+# its way out, whether the export worked or not...
+LPOD_EXPORT_STOPPED=()
+
+function volume_export_restart {
+    local APP LPOD_BIN
+    LPOD_BIN="$(realpath "$0")"
+
+    for APP in "${LPOD_EXPORT_STOPPED[@]}"; do
+        if ! "$LPOD_BIN" "$APP" up --no-block --json > /dev/null 2>&1; then
+            echo "Couldn't start ${APP} again." >&2
+            LPOD_EXPORT_FAILED=true
+        fi
+    done
+
+    LPOD_EXPORT_STOPPED=()
+}
+
+# "lpod volume export NAME [--stop] --json": writes the contents of the
+# volume NAME to stdout as a tar archive ("podman volume export"), and
+# nothing else, so a tool can stream it into a file. A volume with a "device"
+# option (bind-backed, such as a media library, or NFS) is refused, since its
+# archive would be the whole folder or share. With --stop, the applications
+# whose running containers use the volume stop first, for a consistent copy,
+# and start again afterwards, also when the export fails or the reader goes
+# away...
+function volume_export {
+    local NAME="${1:-}"
+    shift || true
+
+    local STOP=false
+
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --stop) STOP=true ;;
+            --json) ;;
+            *) echo "Unknown option: $1" >&2; return 1 ;;
+        esac
+
+        shift
+    done
+
+    valid_name "$NAME" || return 1
+
+    local PODMAN="${LPOD_PODMAN_BINARY:-podman}"
+    local VOLUME DEVICE
+    VOLUME="$("$PODMAN" volume inspect "$NAME" 2> /dev/null)" || {
+        echo "No volume named ${NAME}." >&2
+
+        return 1
+    }
+    DEVICE="$(jq -r '.[0].Options.device // ""' <<< "$VOLUME")"
+
+    if [ -n "$DEVICE" ]; then
+        echo "${NAME} is backed by ${DEVICE}, outside Podman's storage, so lpod doesn't export it. Back that up on the host instead." >&2
+
+        return 1
+    fi
+
+    LPOD_EXPORT_FAILED=false
+
+    if [ "$STOP" == true ]; then
+        local UNITS RUNNING APP
+        UNITS="$(quadlet_units_json)" || return 1
+        RUNNING="$("$PODMAN" ps --filter "volume=${NAME}" --format json)" || return 1
+
+        trap volume_export_restart EXIT
+        trap 'exit 1' HUP INT TERM PIPE
+
+        while IFS= read -r APP; do
+            LPOD_EXPORT_STOPPED+=("$APP")
+
+            if ! "$(realpath "$0")" "$APP" down --json > /dev/null; then
+                echo "Couldn't stop ${APP}." >&2
+
+                return 1
+            fi
+        done < <(jq -r --slurpfile units <(printf '%s' "$UNITS") '
+            [.[] | .Labels.PODMAN_SYSTEMD_UNIT // empty | . as $unit | first($units[0][] | select(.UnitName == $unit) | .app) // empty]
+            | unique[]' <<< "${RUNNING:-[]}")
+    fi
+
+    "$PODMAN" volume export "$NAME" || {
+        echo "Couldn't export ${NAME}." >&2
+        volume_export_restart
+
+        return 1
+    }
+
+    volume_export_restart
+
+    if [ "$LPOD_EXPORT_FAILED" == true ]; then
+        return 1
+    fi
 }
 
 # "lpod volumes prune --json": removes every volume no container uses, with
