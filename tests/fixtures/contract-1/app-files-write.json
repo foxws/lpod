@@ -1,0 +1,8 @@
+{
+    "contract": 1,
+    "file": {
+        "name": "immich-server.container.d/memory.local.conf",
+        "path": "/home/blue/.config/containers/systemd/immich/immich-server.container.d/memory.local.conf",
+        "content": "[Container]\nMemory=4g\n"
+    }
+}

@@ -1923,29 +1923,14 @@ function app_files_remove {
     local UNITS
     UNITS="$(quadlet_units_json)" || return 1
 
-    local QUADLETS=() DROPINS=() NAME QUADLET_PATH
+    local QUADLETS=() DROPINS=() NAME
 
     for NAME in "${NAMES[@]}"; do
         if [[ "$NAME" == */* ]]; then
-            local QUADLET="${NAME%%.d/*}" DROPIN="${NAME#*.d/}"
-
-            if [[ "$NAME" != "${QUADLET}.d/${DROPIN}" ]] || ! [[ "$DROPIN" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]*\.conf$ ]]; then
-                echo "${NAME} isn't a file of ${APP_NAME}." >&2
-
-                return 1
-            fi
-
-            if [[ "$DROPIN" == lpod-* ]]; then
-                echo "${NAME} was written by lpod, so lpod's own command removes it." >&2
-
-                return 1
-            fi
-
-            QUADLET_PATH="$(jq -r --arg app "$APP_NAME" --arg name "$QUADLET" 'first(.[] | select(.app == $app and .Name == $name) | .Path) // empty' <<< "$UNITS")"
             local DROPIN_PATH
-            DROPIN_PATH="$(dirname "$QUADLET_PATH")/${QUADLET}.d/${DROPIN}"
+            DROPIN_PATH="$(app_dropin_path "$APP_NAME" "$NAME" "$UNITS")" || return 1
 
-            if [ -z "$QUADLET_PATH" ] || [ ! -f "$DROPIN_PATH" ] || [ -L "$DROPIN_PATH" ]; then
+            if [ ! -f "$DROPIN_PATH" ]; then
                 echo "${NAME} isn't a file of ${APP_NAME}." >&2
 
                 return 1
@@ -1974,6 +1959,111 @@ function app_files_remove {
     "${SYSTEMCTL_CMD[@]}" daemon-reload || return 1
 
     printf '%s\n' "${NAMES[@]}" | jq -R . | jq -s --argjson contract "$LPOD_CONTRACT" '{contract: $contract, removed: .}'
+}
+
+# "lpod APP files write NAME --stdin --json": writes the drop-in NAME
+# (QUADLET.d/FILE.conf, as "APP files" names it) next to one of the
+# application's Quadlets, with the content on stdin (up to 256 KiB), and
+# reloads systemd. A running unit picks it up when it restarts. lpod's own
+# drop-ins (lpod-*.conf) are refused, like in "APP files remove"...
+function app_files_write {
+    local APP_NAME="$1"
+    shift
+
+    local NAME="" STDIN=false ARG
+
+    for ARG in "$@"; do
+        case "$ARG" in
+            --stdin) STDIN=true ;;
+            --json) ;;
+            -*) echo "Unknown option: $ARG" >&2; return 1 ;;
+            *)
+                if [ -n "$NAME" ]; then
+                    echo "Write one drop-in at a time." >&2
+
+                    return 1
+                fi
+
+                NAME="$ARG"
+                ;;
+        esac
+    done
+
+    if [ -z "$NAME" ] || [ "$STDIN" != true ]; then
+        echo "Usage: lpod APP files write NAME --stdin --json" >&2
+
+        return 1
+    fi
+
+    local UNITS DROPIN_PATH
+    UNITS="$(quadlet_units_json)" || return 1
+    DROPIN_PATH="$(app_dropin_path "$APP_NAME" "$NAME" "$UNITS")" || return 1
+
+    local DIRECTORY TEMPORARY
+    DIRECTORY="$(dirname "$DROPIN_PATH")"
+    mkdir -p "$DIRECTORY" || return 1
+    # Not a .conf, so the generator never reads it half-written.
+    TEMPORARY="$(mktemp "${DIRECTORY}/.lpod-write.XXXXXX")" || return 1
+
+    if ! head -c 262145 > "$TEMPORARY" || [ "$(wc -c < "$TEMPORARY")" -gt 262144 ]; then
+        rm -f "$TEMPORARY"
+        echo "A drop-in can be 256 KiB at most." >&2
+
+        return 1
+    fi
+
+    if ! chmod 0644 "$TEMPORARY" || ! mv -f "$TEMPORARY" "$DROPIN_PATH"; then
+        rm -f "$TEMPORARY"
+
+        return 1
+    fi
+
+    "${SYSTEMCTL_CMD[@]}" daemon-reload || return 1
+
+    # shellcheck disable=SC2094
+    jq -Rs --argjson contract "$LPOD_CONTRACT" --arg name "$NAME" --arg path "$DROPIN_PATH" '{contract: $contract, file: {name: $name, path: $path, content: .}}' < "$DROPIN_PATH"
+}
+
+# Prints where the drop-in NAME (QUADLET.d/FILE.conf, as "APP files" names
+# it) of the application APP_NAME goes: next to its Quadlet, found in UNITS
+# (the JSON of quadlet_units_json). Refuses any other name, lpod's own
+# drop-ins (lpod-*.conf) and symlinks, so nothing outside the Quadlet's
+# drop-in directory is touched.
+function app_dropin_path {
+    local APP_NAME="$1" NAME="$2" UNITS="$3"
+    local QUADLET="${NAME%%.d/*}" DROPIN="${NAME#*.d/}"
+
+    if [[ "$NAME" != "${QUADLET}.d/${DROPIN}" ]] || ! [[ "$DROPIN" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]*\.conf$ ]]; then
+        echo "${NAME} isn't a file of ${APP_NAME}." >&2
+
+        return 1
+    fi
+
+    if [[ "$DROPIN" == lpod-* ]]; then
+        echo "${NAME} was written by lpod, so lpod's own command changes it." >&2
+
+        return 1
+    fi
+
+    local QUADLET_PATH
+    QUADLET_PATH="$(jq -r --arg app "$APP_NAME" --arg name "$QUADLET" 'first(.[] | select(.app == $app and .Name == $name) | .Path) // empty' <<< "$UNITS")"
+
+    if [ -z "$QUADLET_PATH" ]; then
+        echo "${NAME} isn't a file of ${APP_NAME}." >&2
+
+        return 1
+    fi
+
+    local DIRECTORY
+    DIRECTORY="$(dirname "$QUADLET_PATH")/${QUADLET}.d"
+
+    if [ -L "$DIRECTORY" ] || [ -L "${DIRECTORY}/${DROPIN}" ]; then
+        echo "${NAME} is a symlink, which lpod leaves alone." >&2
+
+        return 1
+    fi
+
+    echo "${DIRECTORY}/${DROPIN}"
 }
 
 # Where the Pods proxy (pods-proxy, a Caddy Quadlet) reads the routes of each
@@ -3062,6 +3152,13 @@ function cmd_app_json {
             if [ "${1:-}" == "remove" ]; then
                 shift
                 app_files_remove "$(jq -r '.name' <<< "$APPLICATION")" "$@"
+
+                return
+            fi
+
+            if [ "${1:-}" == "write" ]; then
+                shift
+                app_files_write "$(jq -r '.name' <<< "$APPLICATION")" "$@"
 
                 return
             fi
