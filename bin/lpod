@@ -5107,12 +5107,32 @@ if [ $# -eq 0 ]; then
     exit 1
 fi
 
-# Source the ".env" file so Laravel's environment variables are available...
-# shellcheck source=/dev/null
-if [ -n "$APP_ENV" ] && [ -f ./.env."$APP_ENV" ]; then
-  source ./.env."$APP_ENV";
+# Reads the settings lpod uses from a ".env" file. The file comes with the
+# checkout in the current directory, so it's never run, and it can't set
+# anything else, such as the Podman binary...
+function load_env_file {
+    local LINE KEY VALUE
+    local PATTERN='^[[:space:]]*(export[[:space:]]+)?(APP_PORT|APP_USER|APP_URL|XDEBUG_MODE)=(.*)$'
+
+    while IFS= read -r LINE || [ -n "$LINE" ]; do
+        [[ "${LINE%$'\r'}" =~ $PATTERN ]] || continue
+        KEY="${BASH_REMATCH[2]}"
+        VALUE="${BASH_REMATCH[3]}"
+
+        if [[ "$VALUE" =~ ^\"([^\"]*)\" ]] || [[ "$VALUE" =~ ^\'([^\']*)\' ]]; then
+            VALUE="${BASH_REMATCH[1]}"
+        else
+            VALUE="${VALUE%%[[:space:]]*}"
+        fi
+
+        printf -v "$KEY" '%s' "$VALUE"
+    done < "$1"
+}
+
+if [ -n "$APP_ENV" ] && [ -f "./.env.${APP_ENV}" ]; then
+    load_env_file "./.env.${APP_ENV}"
 elif [ -f ./.env ]; then
-  source ./.env;
+    load_env_file ./.env
 fi
 
 # Define environment variables...
@@ -5384,6 +5404,13 @@ case "$COMMAND" in
             FULL_URL="${APP_URL}:${APP_PORT}"
         else
             FULL_URL="$APP_URL"
+        fi
+
+        # APP_URL can come from the checkout's .env, so it only opens web pages...
+        if ! [[ "$FULL_URL" =~ ^https?:// ]]; then
+            echo "Set APP_URL to an http:// or https:// address." >&2
+
+            exit 1
         fi
 
         exec xdg-open "$FULL_URL"

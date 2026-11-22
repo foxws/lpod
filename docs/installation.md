@@ -14,7 +14,7 @@ curl -fsSL https://github.com/foxws/lpod/releases/latest/download/install.sh | b
 It installs `lpod` to `~/.local/bin` (`/usr/local/bin` as root). It also offers to enable linger, so your services start at boot without logging in.
 
 The installer:
-- **Checks the downloads.** Each one is verified against the release's `SHA256SUMS` before anything is replaced. A failed download or checksum leaves your current install as it was.
+- **Checks the downloads.** Each one is verified against the release's `SHA256SUMS` before anything is replaced. A failed download or checksum, `SHA256SUMS` itself included, leaves your current install as it was.
 - **Warns about common setup problems.** It warns when `podman quadlet` isn't available (Podman 6.0 or later is needed), and when your user has no `/etc/subuid` or `/etc/subgid` range for rootless Podman.
 - **Never runs half a script.** Everything runs from the last line, so a download that's cut off doesn't run part of the installer.
 
