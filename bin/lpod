@@ -4508,6 +4508,21 @@ function cmd_quadlet_fetch {
 
     local SOURCE="${WORK}/repository${DIRECTORY:+/$DIRECTORY}"
 
+    # No part of the path may be a symlink: it could lead out of the clone, to
+    # any file this user can read.
+    local PART PARTS CURRENT="${WORK}/repository"
+    IFS=/ read -ra PARTS <<< "$DIRECTORY"
+
+    for PART in "${PARTS[@]}"; do
+        CURRENT="${CURRENT}/${PART}"
+
+        if [ -L "$CURRENT" ]; then
+            echo "${DIRECTORY} is not a directory in the repository." >&2
+
+            return 1
+        fi
+    done
+
     if [ ! -d "$SOURCE" ] || [ -L "$SOURCE" ]; then
         echo "${DIRECTORY} is not a directory in the repository." >&2
 
