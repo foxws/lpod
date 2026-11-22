@@ -161,6 +161,7 @@ function display_help {
     echo "  ${GREEN}lpod volumes sizes --json${NC}               The disk space each named volume uses (walks every file)"
     echo "  ${GREEN}lpod volume|network rm NAME --json${NC}      Remove a volume or network"
     echo "  ${GREEN}lpod volume export NAME --json${NC}          Write a volume to stdout as a tar archive ([--stop] its applications meanwhile)"
+    echo "  ${GREEN}lpod volume import NAME --stdin --json${NC}  Replace a volume's contents with a tar archive from stdin ([--stop] its applications meanwhile)"
     echo "  ${GREEN}lpod journal --json${NC}                     The journal of every Quadlet unit ([--lines N] [--since T|boot] [--priority N])"
     echo "  ${GREEN}lpod quadlet check --stdin --json${NC}       Check Quadlet files with a dry run"
     echo "  ${GREEN}lpod quadlet install APP --stdin --json${NC} Install Quadlet files as an application ([--replace] [--start])"
@@ -4024,7 +4025,7 @@ function cmd_volumes_json {
         }'
 }
 
-# "lpod volume rm NAME --json", "lpod volume export NAME [--stop] --json"...
+# "lpod volume rm|export|import NAME --json"...
 function cmd_volume_json {
     require_jq
 
@@ -4035,8 +4036,15 @@ function cmd_volume_json {
         return
     fi
 
+    if [ "${1:-}" == "import" ]; then
+        shift
+        volume_import "$@"
+
+        return
+    fi
+
     if [ "${1:-}" != "rm" ]; then
-        echo "Usage: lpod volume rm|export NAME --json" >&2
+        echo "Usage: lpod volume rm|export|import NAME --json" >&2
 
         return 1
     fi
@@ -4142,6 +4150,325 @@ function volume_export {
     if [ "$LPOD_EXPORT_FAILED" == true ]; then
         return 1
     fi
+}
+
+# What "volume import" has to undo on its way out...
+LPOD_IMPORT_ARCHIVE=""
+LPOD_IMPORT_CREATED=""
+LPOD_IMPORT_PATH=""
+LPOD_IMPORT_ROOT=""
+LPOD_IMPORT_STATE=""
+LPOD_IMPORT_APPS=()
+LPOD_IMPORT_SOCKETS=()
+
+# Runs a script on a volume's files, with its mountpoint as $1. A rootless
+# user's volume holds files owned by its subordinate IDs, which only "podman
+# unshare" can move and remove...
+function volume_files {
+    local SCRIPT="$1"
+    shift
+
+    if [ "$(id -u)" -eq 0 ]; then
+        sh -c "$SCRIPT" sh "$@" < /dev/null
+    else
+        "${LPOD_PODMAN_BINARY:-podman}" unshare sh -c "$SCRIPT" sh "$@" < /dev/null
+    fi
+}
+
+# Moves what a volume holds into .lpod-restore inside it, which is instant
+# and takes no space...
+function volume_set_aside {
+    # shellcheck disable=SC2016
+    volume_files 'set -eu
+        find "${1:?}" -mindepth 1 -maxdepth 1 ! -name .lpod-restore -exec mv -t "$1/.lpod-restore" -- {} +' "$1"
+}
+
+# Puts the set aside contents back. Only a volume whose contents had all
+# moved ("moved") gets what the archive wrote removed first: before that,
+# what's still in place is the original...
+function volume_put_back {
+    # shellcheck disable=SC2016
+    volume_files 'set -eu
+        test -d "${1:?}/.lpod-restore" || exit 0
+        if [ "$2" = moved ]; then
+            find "$1" -mindepth 1 -maxdepth 1 ! -name .lpod-restore -exec rm -rf --one-file-system -- {} +
+        fi
+        find "$1/.lpod-restore" -mindepth 1 -maxdepth 1 -exec mv -t "$1" -- {} +
+        rmdir -- "$1/.lpod-restore"
+        chown -- "${3% *}" "$1"
+        chmod -- "${3##* }" "$1"' "$1" "$2" "$3"
+}
+
+# Undoes an import that didn't finish, and starts again what it stopped...
+function volume_import_cleanup {
+    local STATUS=$?
+    local PODMAN="${LPOD_PODMAN_BINARY:-podman}"
+    local LPOD_BIN SOCKET APP
+
+    # A reader that went away mustn't cut the rollback short
+    trap '' HUP INT TERM PIPE
+    trap - EXIT
+
+    LPOD_BIN="$(realpath "$0")"
+
+    if [ -n "$LPOD_IMPORT_STATE" ] && ! volume_put_back "$LPOD_IMPORT_PATH" "$LPOD_IMPORT_STATE" "$LPOD_IMPORT_ROOT"; then
+        echo "Couldn't put the contents back. They're in ${LPOD_IMPORT_PATH}/.lpod-restore, and what used the volume stays stopped." >&2
+        LPOD_IMPORT_APPS=()
+        LPOD_IMPORT_SOCKETS=()
+        STATUS=1
+    fi
+
+    if [ -n "$LPOD_IMPORT_CREATED" ]; then
+        "$PODMAN" volume rm "$LPOD_IMPORT_CREATED" > /dev/null 2>&1 || echo "Couldn't remove the new volume ${LPOD_IMPORT_CREATED} again." >&2
+    fi
+
+    for SOCKET in "${LPOD_IMPORT_SOCKETS[@]}"; do
+        if ! "${SYSTEMCTL_CMD[@]}" start "$SOCKET" > /dev/null 2>&1; then
+            echo "Couldn't start ${SOCKET} again." >&2
+            STATUS=1
+        fi
+    done
+
+    for APP in "${LPOD_IMPORT_APPS[@]}"; do
+        if ! "$LPOD_BIN" "$APP" up --no-block --json > /dev/null 2>&1; then
+            echo "Couldn't start ${APP} again." >&2
+            STATUS=1
+        fi
+    done
+
+    if [ -n "$LPOD_IMPORT_ARCHIVE" ]; then
+        rm -f -- "$LPOD_IMPORT_ARCHIVE"
+    fi
+
+    if [ "$STATUS" -eq 0 ]; then
+        json_ok
+    fi
+
+    exit "$STATUS"
+}
+
+# Checks that an archive is complete. tar also lists one that was cut off
+# between two files without failing: only the end marker, a block of NULs,
+# tells those apart...
+function volume_archive_check {
+    local LISTING
+
+    if ! LISTING="$(LC_ALL=C tar --list --block-number --file "$1" 2> /dev/null)" \
+        || ! [[ "${LISTING##*$'\n'}" =~ ^block\ [0-9]+:\ \*\*\ Block\ of\ NULs\ \*\*$ ]]; then
+        echo "The archive is empty, cut off or not a tar archive, so the volume is left as it was." >&2
+
+        return 1
+    fi
+
+    if grep -qF '.lpod-restore' <<< "$LISTING"; then
+        echo "The archive has a .lpod-restore, which lpod needs for itself, so the volume is left as it was." >&2
+
+        return 1
+    fi
+}
+
+# "lpod volume import NAME --stdin [--stop] --json": replaces the contents of
+# the volume NAME with the tar archive on stdin. "podman volume import" only
+# merges, and files newer than the archive would be left among the restored
+# ones, so the old contents are set aside first and come back when anything
+# fails. The archive is read and checked as a whole before that, so a
+# connection that drops changes nothing. A volume that doesn't exist is
+# created, unless a Quadlet defines it, whose options a plain one wouldn't
+# have. Running containers refuse the import, unless --stop stops their
+# applications meanwhile. The on-demand sockets of the applications that use
+# the volume pause, so a request can't wake one halfway...
+function volume_import {
+    local NAME="${1:-}"
+    shift || true
+
+    local STOP=false
+    local STDIN=false
+
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --stop) STOP=true ;;
+            --stdin) STDIN=true ;;
+            --json) ;;
+            *) echo "Unknown option: $1" >&2; return 1 ;;
+        esac
+
+        shift
+    done
+
+    valid_name "$NAME" || return 1
+
+    if [ "$STDIN" != true ]; then
+        echo "Usage: lpod volume import NAME --stdin [--stop] --json" >&2
+
+        return 1
+    fi
+
+    local PODMAN="${LPOD_PODMAN_BINARY:-podman}"
+    local VOLUME="" UNITS SOURCES USAGE QUADLET
+    UNITS="$(quadlet_units_json)" || return 1
+    SOURCES="$(quadlet_sources_json "$UNITS")" || return 1
+
+    # The Quadlet that defines the volume, and the applications that use it,
+    # also while they sleep and have no containers...
+    USAGE="$(jq -n --arg name "$NAME" --slurpfile units <(printf '%s' "$UNITS") --slurpfile sources <(printf '%s' "$SOURCES") '
+        $units[0] as $units
+        | ($sources[0] | map({(.name): .content}) | add // {}) as $content
+        | def lines($unit): ($content[$unit] // "") | split("\n") | map(gsub("^\\s+|\\s+$"; ""));
+        def value($unit; $key): lines($unit) | map(select(test("^\($key)\\s*=")) | sub("^\($key)\\s*=\\s*"; ""));
+        ([$units[] | select(.ext == "volume") | select(((value(.Name; "VolumeName") | last) // "systemd-\(.base)") == $name) | .Name]) as $defining
+        | ([$name] + $defining) as $references
+        | {
+            quadlet: ($defining | first // ""),
+            apps: ([$units[]
+                | select((.app // "") != "")
+                | select(.ext == "container" or .ext == "pod")
+                | select(any(
+                    (value(.Name; "Volume")[] | split(":")[0]),
+                    (value(.Name; "Mount")[] | split(",")[] | select(test("^(source|src)=")) | sub("^(source|src)="; ""));
+                    . as $used | any($references[]; . == $used)))
+                | .app] | unique)
+        }')" || return 1
+
+    if "$PODMAN" volume exists "$NAME"; then
+        VOLUME="$("$PODMAN" volume inspect "$NAME")" || return 1
+
+        if ! jq -e '.[0] | (.Driver // "local") == "local" and (.Options.device // "") == "" and (.Options.type // "") == ""' <<< "$VOLUME" > /dev/null; then
+            echo "${NAME} is backed by a folder, device, share or driver outside Podman's storage, so lpod doesn't import into it. Restore that on the host instead." >&2
+
+            return 1
+        fi
+    else
+        QUADLET="$(jq -r '.quadlet' <<< "$USAGE")"
+
+        if [ -n "$QUADLET" ]; then
+            echo "${NAME} doesn't exist yet and ${QUADLET} defines it. Start that first, so the volume gets its options." >&2
+
+            return 1
+        fi
+    fi
+
+    trap volume_import_cleanup EXIT
+    trap 'exit 1' HUP INT TERM PIPE
+
+    # Not /tmp, which is often in memory, and an archive can be large
+    LPOD_IMPORT_ARCHIVE="$(mktemp "${TMPDIR:-/var/tmp}/lpod-import.XXXXXX")" || exit 1
+
+    if ! cat > "$LPOD_IMPORT_ARCHIVE"; then
+        echo "Couldn't read the archive, so the volume is left as it was." >&2
+        exit 1
+    fi
+
+    volume_archive_check "$LPOD_IMPORT_ARCHIVE" || exit 1
+
+    if [ -z "$VOLUME" ]; then
+        "$PODMAN" volume create "$NAME" > /dev/null || exit 1
+        LPOD_IMPORT_CREATED="$NAME"
+        VOLUME="$("$PODMAN" volume inspect "$NAME")" || exit 1
+    fi
+
+    local MOUNTPOINT
+    MOUNTPOINT="$(jq -r '.[0].Mountpoint // ""' <<< "$VOLUME")"
+
+    # Everything below removes files in it, so only ever a volume's own _data
+    if ! [[ "$MOUNTPOINT" == /*/_data ]] || [[ "$MOUNTPOINT" == */../* ]]; then
+        echo "${NAME} has an unexpected mountpoint (${MOUNTPOINT}), so lpod doesn't import into it." >&2
+        exit 1
+    fi
+
+    # shellcheck disable=SC2016
+    if ! volume_files 'test ! -e "$1/.lpod-restore" && test ! -L "$1/.lpod-restore"' "$MOUNTPOINT"; then
+        echo "An import into ${NAME} is running or was cut off: ${MOUNTPOINT}/.lpod-restore holds the contents from before it. Check it on the host first." >&2
+        exit 1
+    fi
+
+    local RUNNING APP SOCKET
+    RUNNING="$("$PODMAN" ps --filter "volume=${NAME}" --format json)" || exit 1
+
+    if [ "$STOP" != true ] && ! jq -e 'length == 0' <<< "${RUNNING:-[]}" > /dev/null; then
+        echo "${NAME} is in use. Stop what uses it, or pass --stop." >&2
+        exit 1
+    fi
+
+    local -a STOPPING
+    mapfile -t STOPPING < <(jq -r --slurpfile units <(printf '%s' "$UNITS") '
+        [.[] | .Labels.PODMAN_SYSTEMD_UNIT // empty | . as $unit | first($units[0][] | select(.UnitName == $unit) | .app) // empty]
+        | unique[]' <<< "${RUNNING:-[]}")
+
+    # The sockets first, or a request starts what was just stopped
+    while IFS= read -r APP; do
+        valid_name "$APP" || exit 1
+        SOCKET="${APP}-ondemand.socket"
+
+        if unit_is_active "$SOCKET"; then
+            LPOD_IMPORT_SOCKETS+=("$SOCKET")
+
+            if ! "${SYSTEMCTL_CMD[@]}" stop "$SOCKET" > /dev/null; then
+                echo "Couldn't stop ${SOCKET}." >&2
+                exit 1
+            fi
+        fi
+    done < <({ jq -r '.apps[]' <<< "$USAGE"; printf '%s\n' "${STOPPING[@]}"; } | sed '/^$/d' | sort -u)
+
+    for APP in "${STOPPING[@]}"; do
+        LPOD_IMPORT_APPS+=("$APP")
+
+        if ! "$(realpath "$0")" "$APP" down --json > /dev/null < /dev/null; then
+            echo "Couldn't stop ${APP}." >&2
+            exit 1
+        fi
+    done
+
+    RUNNING="$("$PODMAN" ps --filter "volume=${NAME}" --format json)" || exit 1
+
+    if ! jq -e 'length == 0' <<< "${RUNNING:-[]}" > /dev/null; then
+        echo "${NAME} is still in use, by a container lpod can't stop, so it's left as it was." >&2
+        exit 1
+    fi
+
+    # shellcheck disable=SC2016
+    LPOD_IMPORT_ROOT="$(volume_files 'stat -c "%u:%g %a" -- "$1"' "$MOUNTPOINT")" || exit 1
+    LPOD_IMPORT_PATH="$MOUNTPOINT"
+
+    # The mkdir keeps a second import out. Nothing is to undo until it
+    # worked: the .lpod-restore of another import mustn't be put back...
+    # shellcheck disable=SC2016
+    if ! volume_files 'mkdir -m 700 -- "${1:?}/.lpod-restore"' "$MOUNTPOINT"; then
+        echo "Couldn't set the contents of ${NAME} aside, or another import into it is running." >&2
+        exit 1
+    fi
+
+    LPOD_IMPORT_STATE=moving
+
+    if ! volume_set_aside "$MOUNTPOINT"; then
+        echo "Couldn't set the contents of ${NAME} aside." >&2
+        exit 1
+    fi
+
+    LPOD_IMPORT_STATE=moved
+
+    if ! "$PODMAN" volume import "$NAME" - < "$LPOD_IMPORT_ARCHIVE" > /dev/null; then
+        echo "Couldn't import into ${NAME}, so its contents are put back." >&2
+        exit 1
+    fi
+
+    RUNNING="$("$PODMAN" ps --filter "volume=${NAME}" --format json)" || exit 1
+
+    if ! jq -e 'length == 0' <<< "${RUNNING:-[]}" > /dev/null; then
+        echo "Something started using ${NAME} during the import, so its contents are put back." >&2
+        exit 1
+    fi
+
+    # From here the import stands
+    LPOD_IMPORT_STATE=""
+    LPOD_IMPORT_CREATED=""
+
+    # shellcheck disable=SC2016
+    if ! volume_files 'rm -rf --one-file-system -- "${1:?}/.lpod-restore"' "$MOUNTPOINT"; then
+        echo "Imported, but couldn't remove the old contents in ${MOUNTPOINT}/.lpod-restore." >&2
+        exit 1
+    fi
+
+    exit 0
 }
 
 # "lpod volumes prune --json": removes every volume no container uses, with
