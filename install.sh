@@ -88,8 +88,8 @@ function fetch {
     fi
 }
 
-# Checks a download against the release's SHA256SUMS. Releases before
-# SHA256SUMS was published can't be verified, so those only get a warning...
+# Checks a download against the release's SHA256SUMS. A release is never
+# installed unverified, so a missing or failed download of it stops here...
 function verify {
     local NAME="$1"
     local FILE="$2"
@@ -103,9 +103,7 @@ function verify {
     fi
 
     if [ ! -s "$SUMS" ]; then
-        warn "This release has no SHA256SUMS, so ${NAME} can't be verified."
-
-        return 0
+        fail "Could not download SHA256SUMS of ${VERSION}, so ${NAME} can't be verified. Nothing was installed. Releases before v2.2.0 have none."
     fi
 
     EXPECTED="$(awk -v name="$NAME" '$2 == name || $2 == "*" name { print $1 }' "$SUMS")"
