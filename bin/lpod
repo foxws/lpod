@@ -226,6 +226,10 @@ function cmd_secrets {
         local -a PARTS
         IFS=',' read -ra PARTS <<< "${LINE#Secret=}"
         local NAME="${PARTS[0]}"
+
+        # The name is the Quadlet author's, and becomes an argument...
+        valid_name "$NAME" || return 1
+
         local TYPE="mount"
         local TARGET="$NAME"
         local PART
@@ -697,6 +701,9 @@ function quadlet_units_json {
             base: (.Name | sub("\\.[^.]+$"; "")),
             ext: (.Name | capture("\\.(?<ext>[^.]+)$").ext)
         })
+        # ServiceName= is the file author'"'"'s, and systemctl would read a
+        # leading "-" as an option (such as --host=)...
+        | map(if ((.UnitName // "") | startswith("-")) then .UnitName = "\(.base | sub("^-+"; "")).service" else . end)
         | map(. + {app: (if (.App // "") == "" then .base else .App end)})'
 }
 
@@ -1953,7 +1960,7 @@ function app_files_remove {
     fi
 
     if [ ${#QUADLETS[@]} -gt 0 ]; then
-        "${LPOD_PODMAN_BINARY:-podman}" quadlet rm --force "${QUADLETS[@]}" > /dev/null || return 1
+        "${LPOD_PODMAN_BINARY:-podman}" quadlet rm --force -- "${QUADLETS[@]}" > /dev/null || return 1
     fi
 
     "${SYSTEMCTL_CMD[@]}" daemon-reload || return 1
@@ -3287,7 +3294,7 @@ function cmd_app_json {
             # Images built on the host ("localhost/...") have no registry to
             # pull from, so only the restart picks up a rebuild...
             while IFS= read -r IMAGE; do
-                "${LPOD_PODMAN_BINARY:-podman}" pull --quiet "$IMAGE" > /dev/null || return 1
+                "${LPOD_PODMAN_BINARY:-podman}" pull --quiet -- "$IMAGE" > /dev/null || return 1
             done < <(jq -r '[.detail.items[].image | select(. != null and (startswith("localhost/") | not))] | unique[]' <<< "$APPLICATION")
 
             app_start_main restart "$APP_NAME" "$(jq -r '.unit' <<< "$APPLICATION")" || return 1
@@ -3454,6 +3461,13 @@ function cmd_container_json {
 
     local UNIT
     UNIT="$(jq -r '.unit // empty' <<< "$SUMMARY")"
+
+    # It's a label of the container, so anyone's to write...
+    if [[ "$UNIT" == -* ]]; then
+        echo "Invalid unit of ${NAME}: ${UNIT}." >&2
+
+        return 1
+    fi
 
     case "$ACTION" in
         inspect)
@@ -4551,8 +4565,11 @@ function cmd_quadlet_fetch {
         fi
     done
 
+    # File names come from the repository and can hold newlines, so they're
+    # separated by NUL: a second line would be a path of its own, relative to
+    # the working directory. A name with a newline isn't a Quadlet's anyway...
     # shellcheck disable=SC2094
-    find "$SOURCE" -maxdepth 1 -type f -size -256k ! -name '.*' | sort | head -n 50 | while IFS= read -r FILE; do
+    find "$SOURCE" -maxdepth 1 -type f -size -256k ! -name '.*' ! -name $'*\n*' -print0 | sort -z | head -z -n 50 | while IFS= read -r -d '' FILE; do
         jq -Rs --arg name "$(basename "$FILE")" '{name: $name, content: .}' < "$FILE"
     done | jq -s --argjson contract "$LPOD_CONTRACT" --arg commit "$COMMIT" "${MANIFEST_ARGS[@]}" '{contract: $contract, commit: $commit, manifest: $manifest, manifest_path: $manifest_path, files: .}'
 }
@@ -4588,7 +4605,7 @@ function cmd_quadlet_catalog {
     local COMMIT
     COMMIT="$(git -C "${WORK}/repository" rev-parse --short HEAD)"
 
-    find "${WORK}/repository" -mindepth 2 -maxdepth 2 -name pods.yml ! -path '*/.*/*' | sort | head -n 200 | while IFS= read -r FILE; do
+    find "${WORK}/repository" -mindepth 2 -maxdepth 2 -name pods.yml ! -path '*/.*/*' ! -path $'*\n*' -print0 | sort -z | head -z -n 200 | while IFS= read -r -d '' FILE; do
         local DIRECTORY
         DIRECTORY="$(dirname "$FILE")"
 
@@ -4677,7 +4694,9 @@ function cmd_quadlet_tags {
 
 # "lpod APP remove [--volumes] [--images] [--secrets] --json": stops the
 # application and removes its Quadlets, plus the data it owns when asked.
-# Images and secrets that other applications use stay...
+# Volumes, images and secrets that other applications use stay, as does a
+# volume that a container still uses. The names are the Quadlet authors', so
+# only plain names are removed, and always after "--"...
 function cmd_app_remove_json {
     local APPLICATION="$1"
     shift
@@ -4713,15 +4732,29 @@ function cmd_app_remove_json {
         def directives($content; $key): $content | split("\n") | map(select(startswith($key + "=")) | ltrimstr($key + "=") | sub("\\s+$"; ""));
         def directive($content; $key): directives($content; $key) | last;
         def uses($unit; $key): directives(source($unit.Name); $key);
+        # What others use is read as loosely as systemd does, since missing one loses its data...
+        def kept($unit; $key): source($unit.Name) | split("\n")[] | capture("^\\s*" + $key + "\\s*=\\s*(?<value>.*)$").value | gsub("^[\"\u0027]|[\"\u0027]?\\s*$"; "");
+        def plain: test("^[A-Za-z0-9][A-Za-z0-9_.@-]{0,252}\\z");
+        def image: test("^[A-Za-z0-9][A-Za-z0-9._/:@-]{0,511}\\z");
+        def volume_name: . as $unit | directive(source($unit.Name); "VolumeName") // "systemd-\($unit.base)";
+        def volume_used:
+            . as $used
+            | first($units[] | select(.ext == "volume" and .Name == $used) | volume_name) // $used;
         ($units | map(select(.app == $app))) as $mine
         | ($units | map(select(.app != $app))) as $others
+        | ([$others[] | select(.ext == "volume") | volume_name]
+            + [$others[] | kept(.; "Volume") | split(":")[0] // empty | volume_used]
+            + [$others[] | kept(.; "Mount") | split(",")[] | capture("^(source|src)=(?<value>.*)$").value | volume_used]) as $volumes_kept
+        | [$others[] | kept(.; "Image")] as $images_kept
+        | [$others[] | kept(.; "Secret") | split(",")[0] // empty] as $secrets_kept
         | {
-            volumes: ([$mine[] | select(.ext == "volume") | directive(source(.Name); "VolumeName") // "systemd-\(.base)"]
-                + [$mine[] | select(.ext == "container") | uses(.; "Volume")[] | split(":")[0] // "" | select(test("^[A-Za-z0-9][A-Za-z0-9_.-]*$") and (endswith(".volume") | not))]) | unique,
-            images: ([$mine[] | select(.ext == "container") | uses(.; "Image")[] | select(endswith(".build") or endswith(".image") | not)] | unique
-                | map(select(. as $image | [$others[] | select(.ext == "container") | uses(.; "Image")[]] | index($image) | not))),
-            secrets: ([$mine[] | select(.ext == "container") | uses(.; "Secret")[] | split(",")[0] // empty] | unique
-                | map(select(. as $secret | [$others[] | select(.ext == "container") | uses(.; "Secret")[] | split(",")[0] // empty] | index($secret) | not)))
+            volumes: ([$mine[] | select(.ext == "volume") | volume_name]
+                + [$mine[] | select(.ext == "container") | uses(.; "Volume")[] | split(":")[0] // "" | select(endswith(".volume") | not)]
+                | unique | map(select(plain and (. as $volume | $volumes_kept | index($volume) | not)))),
+            images: ([$mine[] | select(.ext == "container") | uses(.; "Image")[] | select(endswith(".build") or endswith(".image") | not)]
+                | unique | map(select(image and (. as $image | $images_kept | index($image) | not)))),
+            secrets: ([$mine[] | select(.ext == "container") | uses(.; "Secret")[] | split(",")[0] // empty]
+                | unique | map(select(plain and (. as $secret | $secrets_kept | index($secret) | not))))
         }')"
 
     # Its timers go first, while their containers' drop-ins are still known...
@@ -4730,30 +4763,30 @@ function cmd_app_remove_json {
     # An application installed with --application is removed as a whole;
     # a lone Quadlet by its file name...
     if jq -e --arg app "$APPLICATION" 'any(.[]; (.App // "") == $app)' <<< "$MINE" > /dev/null; then
-        "$PODMAN" quadlet rm --force --recursive "$APPLICATION" > /dev/null || return 1
+        "$PODMAN" quadlet rm --force --recursive -- "$APPLICATION" > /dev/null || return 1
     else
         local NAMES
         mapfile -t NAMES < <(jq -r '.[].Name' <<< "$MINE")
-        "$PODMAN" quadlet rm --force "${NAMES[@]}" > /dev/null || return 1
+        "$PODMAN" quadlet rm --force -- "${NAMES[@]}" > /dev/null || return 1
     fi
 
     local ITEM
 
     if [ "$VOLUMES" == true ]; then
         while IFS= read -r ITEM; do
-            "$PODMAN" volume rm --force "$ITEM" > /dev/null 2>&1 || true
+            "$PODMAN" volume rm -- "$ITEM" > /dev/null 2>&1 || true
         done < <(jq -r '.volumes[]' <<< "$OWNED")
     fi
 
     if [ "$IMAGES" == true ]; then
         while IFS= read -r ITEM; do
-            "$PODMAN" image rm "$ITEM" > /dev/null 2>&1 || true
+            "$PODMAN" image rm -- "$ITEM" > /dev/null 2>&1 || true
         done < <(jq -r '.images[]' <<< "$OWNED")
     fi
 
     if [ "$SECRETS" == true ]; then
         while IFS= read -r ITEM; do
-            "$PODMAN" secret rm "$ITEM" > /dev/null 2>&1 || true
+            "$PODMAN" secret rm -- "$ITEM" > /dev/null 2>&1 || true
         done < <(jq -r '.secrets[]' <<< "$OWNED")
     fi
 
