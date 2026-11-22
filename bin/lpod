@@ -3050,9 +3050,13 @@ function proxy_caddyfile {
         (if .mode == "local" then "\tlocal_certs" else empty end),
         (if .mode == "http" then "\tauto_https off" else empty end),
         (if .mode == "wildcard" then "\tacme_dns \(.dns_provider) {env.\($env)}" else empty end),
-        "\tservers {",
-        "\t\ttrusted_proxies static private_ranges",
-        "\t}",
+        # Only behind another proxy do the X-Forwarded-* headers say more than
+        # the connection: from a client they are whatever it likes...
+        (if .mode == "http" then
+            "\tservers {",
+            "\t\ttrusted_proxies static private_ranges",
+            "\t}"
+        else empty end),
         "}",
         "",
         "import sites/*.Caddyfile",

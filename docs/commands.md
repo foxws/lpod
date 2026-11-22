@@ -121,6 +121,7 @@ echo '{"mode": "wildcard", "email": "you@example.com", "domain": "home.example.c
 ```
 
 - It writes `~/.config/pods-proxy/Caddyfile`, with the settings on its `# lpod-proxy:` line. Saving again replaces it, so add your own sites in `sites/*.Caddyfile`, which every mode imports. A Caddyfile lpod didn't write is kept next to it as `Caddyfile.TIMESTAMP.backup` first.
+- Only the `http` mode trusts `X-Forwarded-*` headers, and only from private addresses, since another proxy is in front there. The others replace them with what Caddy sees, as a client could send anything. A Caddyfile from an older lpod changes when the settings are saved again.
 - The Caddyfile's admin API listens on `unix//config/admin.sock` instead of port 2019, and lpod reloads Caddy through it.
 - `pods-proxy.container.d/lpod-proxy.conf` publishes `http_port` (default 80) and `https_port` (default 443, also over UDP for HTTP/3; not in `http` mode), and sets the `image`. A drop-in that only publishes ports, such as `install.sh`'s `install.conf` or a `ports.conf`, is removed; one that also sets other things is refused, so ports aren't published twice. Rootless Podman can't publish ports below `net.ipv4.ip_unprivileged_port_start`, which `proxy settings` reports.
 - The `wildcard` mode needs Caddy with the DNS provider's plugin, so its image is `ghcr.io/foxws/pods-proxy:main` unless `image` says otherwise; the other modes keep the Quadlet's `caddy:2`. `cloudflare` is the only `dns_provider` so far.
