@@ -1,0 +1,3 @@
+{"Type": "container", "Status": "died", "Name": "systemd-glance", "Image": "docker.io/glanceapp/glance:latest", "ContainerExitCode": 1, "timeNano": 1795000000123456789, "Attributes": {"PODMAN_SYSTEMD_UNIT": "glance.service"}}
+{"Type": "image", "Status": "pull", "Name": "docker.io/library/valkey:9", "ID": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1", "timeNano": 1794990000000000000}
+{"Type": "container", "Status": "exec", "Name": "stry-app", "timeNano": 1795003600000000000, "Attributes": {"PODMAN_SYSTEMD_UNIT": "stry-app.service"}}

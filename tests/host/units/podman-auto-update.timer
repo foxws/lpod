@@ -1,0 +1,5 @@
+Id=podman-auto-update.timer
+ActiveState=active
+NextElapseUSecRealtime=@1795003600
+LastTriggerUSec=n/a
+TimersCalendar={ OnCalendar=*-*-* 03:00:00 ; next_elapse=@1795003600 }

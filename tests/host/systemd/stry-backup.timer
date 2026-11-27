@@ -1,0 +1,3 @@
+# lpod-timer: {"app": "stry", "name": "backup", "container": "stry-app", "service": "stry-app.service", "on_calendar": "daily", "persistent": true, "randomized_delay_sec": null, "timeout_start_sec": null}
+[Timer]
+OnCalendar=daily

@@ -1,6 +1,124 @@
 [
-    {"Id": "1111111111111111111111111111111111111111111111111111111111111111", "Name": "stry-app", "Image": "c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3", "Created": "2026-11-26T10:00:00.123Z", "RestartCount": 0, "Config": {"User": "", "Labels": {"io.containers.autoupdate": "registry", "PODMAN_SYSTEMD_UNIT": "stry-app.service"}}, "HostConfig": {"Memory": 0}, "Mounts": [{"Type": "volume", "Name": "stry-data", "Source": "/volumes/stry-data/_data"}, {"Type": "bind", "Source": "/srv/media"}], "NetworkSettings": {"Networks": {"stry": {}}}},
-    {"Id": "2222222222222222222222222222222222222222222222222222222222222222", "Name": "stry-valkey", "Image": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1", "Created": "2026-11-26T10:00:00Z", "RestartCount": 0, "Config": {"User": "", "Labels": {"io.containers.autoupdate": "registry", "PODMAN_SYSTEMD_UNIT": "stry-valkey.service"}}, "HostConfig": {"Memory": 0}, "Mounts": [{"Type": "volume", "Name": "f00dcafe", "Source": "/volumes/f00dcafe/_data"}], "NetworkSettings": {"Networks": {"stry": {}}}},
-    {"Id": "3333333333333333333333333333333333333333333333333333333333333333", "Name": "systemd-glance", "Image": "d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4", "Created": "2026-11-26T10:00:00Z", "RestartCount": 3, "Config": {"User": "", "Labels": {"PODMAN_SYSTEMD_UNIT": "glance.service"}}, "HostConfig": {"Memory": 0}, "Mounts": [], "NetworkSettings": {"Networks": {"podman": {}}}},
-    {"Id": "4444444444444444444444444444444444444444444444444444444444444444", "Name": "scratch", "Image": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1", "Created": "2026-11-25T10:00:00Z", "RestartCount": 0, "Config": {"User": "", "Labels": {}}, "HostConfig": {"Memory": 0}, "Mounts": [], "NetworkSettings": {"Networks": {"podman": {}}}}
+  {
+    "Id": "1111111111111111111111111111111111111111111111111111111111111111",
+    "Name": "stry-app",
+    "Image": "c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3",
+    "Created": "2026-11-26T10:00:00.123Z",
+    "RestartCount": 0,
+    "Config": {
+      "User": "",
+      "Labels": {
+        "io.containers.autoupdate": "registry",
+        "PODMAN_SYSTEMD_UNIT": "stry-app.service"
+      }
+    },
+    "HostConfig": {
+      "Memory": 0
+    },
+    "Mounts": [
+      {
+        "Type": "volume",
+        "Name": "stry-data",
+        "Source": "/volumes/stry-data/_data"
+      },
+      {
+        "Type": "bind",
+        "Source": "/srv/media"
+      }
+    ],
+    "NetworkSettings": {
+      "Networks": {
+        "stry": {}
+      }
+    }
+  },
+  {
+    "Id": "2222222222222222222222222222222222222222222222222222222222222222",
+    "Name": "stry-valkey",
+    "Image": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+    "Created": "2026-11-26T10:00:00Z",
+    "RestartCount": 0,
+    "Config": {
+      "User": "",
+      "Labels": {
+        "io.containers.autoupdate": "registry",
+        "PODMAN_SYSTEMD_UNIT": "stry-valkey.service"
+      }
+    },
+    "HostConfig": {
+      "Memory": 0
+    },
+    "Mounts": [
+      {
+        "Type": "volume",
+        "Name": "f00dcafe",
+        "Source": "/volumes/f00dcafe/_data"
+      }
+    ],
+    "NetworkSettings": {
+      "Networks": {
+        "stry": {}
+      }
+    }
+  },
+  {
+    "Id": "3333333333333333333333333333333333333333333333333333333333333333",
+    "Name": "systemd-glance",
+    "Image": "d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4",
+    "Created": "2026-11-26T10:00:00Z",
+    "RestartCount": 3,
+    "Config": {
+      "User": "",
+      "Labels": {
+        "PODMAN_SYSTEMD_UNIT": "glance.service"
+      }
+    },
+    "HostConfig": {
+      "Memory": 0
+    },
+    "Mounts": [],
+    "NetworkSettings": {
+      "Networks": {
+        "podman": {}
+      }
+    }
+  },
+  {
+    "Id": "4444444444444444444444444444444444444444444444444444444444444444",
+    "Name": "scratch",
+    "Image": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+    "Created": "0001-01-01T00:00:00Z",
+    "RestartCount": 0,
+    "Config": {
+      "User": "",
+      "Labels": {}
+    },
+    "HostConfig": {
+      "Memory": 0
+    },
+    "Mounts": [],
+    "NetworkSettings": {
+      "Networks": {
+        "podman": {}
+      }
+    }
+  },
+  {
+    "Id": "6666666666666666666666666666666666666666666666666666666666666666",
+    "Name": "5555-infra",
+    "Image": "e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5",
+    "Created": "2026-11-17T10:00:00Z",
+    "RestartCount": 0,
+    "Config": {
+      "User": "",
+      "Labels": {}
+    },
+    "HostConfig": {
+      "Memory": 0
+    },
+    "Mounts": [],
+    "NetworkSettings": {
+      "Networks": {}
+    }
+  }
 ]
