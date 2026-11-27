@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # A stand-in for systemctl: "show" prints the units in LPOD_TEST_HOST/units,
-# every other call succeeds. Every call is logged to LPOD_TEST_LOG...
+# "list-units --failed" prints LPOD_TEST_HOST/failed-units, and every other
+# call succeeds. Every call is logged to LPOD_TEST_LOG...
 
 HOST="${LPOD_TEST_HOST:?}"
 echo "systemctl $*" >> "${LPOD_TEST_LOG:?}"
@@ -15,6 +16,12 @@ for ARG in "$@"; do
         *) ARGS+=("$ARG") ;;
     esac
 done
+
+if [ "${ARGS[0]:-}" == "list-units" ] && [[ " ${ARGS[*]} " == *" --failed "* ]]; then
+    cat "$HOST/failed-units"
+
+    exit 0
+fi
 
 if [ "${ARGS[0]:-}" != "show" ]; then
     exit 0

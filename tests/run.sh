@@ -57,6 +57,22 @@ function lpod {
     fi
 }
 
+# Runs lpod like lpod does, but keeps its exit code in STATUS instead of
+# failing the test, for commands that fail on purpose...
+function lpod_status {
+    STATUS=0
+    OUTPUT="$(cd "$HOME" && "$LPOD" "$@" 2> "${WORK}/stderr")" || STATUS=$?
+}
+
+# Checks that the last lpod_status exited with CODE...
+function exited_with {
+    if [ "$STATUS" -eq "$1" ]; then
+        pass
+    else
+        fail "expected exit code ${1}, got ${STATUS}: $(cat "${WORK}/stderr")"
+    fi
+}
+
 # Checks that the jq FILTER is true for OUTPUT...
 function check {
     if jq -e "$1" <<< "$OUTPUT" > /dev/null 2>&1; then
@@ -225,6 +241,45 @@ lpod host --json
 check '.auto_update == {"enabled": true, "next_run": "2026-11-18T12:06:40+00:00"}'
 check '.system.booted_at | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\+00:00$")'
 check '.units == {"active": 2, "failed": 1}'
+
+# The cgroup checks read the real /sys of the machine the tests run on, so
+# only their presence is checked...
+mkdir -p "${WORK}/runtime"
+export XDG_RUNTIME_DIR="${WORK}/runtime"
+
+test_case "doctor"
+lpod_status doctor --json
+exited_with 0
+check '["podman", "cgroups", "storage", "jq", "git", "systemd", "failed-services"] - [.checks[].id] == []'
+check 'first(.checks[] | select(.id == "podman")) == {"id": "podman", "status": "ok", "message": "Podman 6.2.0 with Quadlet", "fix": ""}'
+check 'first(.checks[] | select(.id == "storage")) | .status == "ok" and .message == "Podman stores images with the overlay driver"'
+check 'first(.checks[] | select(.id == "failed-services")) | .status == "ok" and .message == "No applications'"'"' services have failed (1 other unit(s) failed: app-nvidia\\x2dsettings\\x2dload@autostart.service)"'
+check '[.checks[] | select(.id == "proxy-certificate")] == []'
+
+if [ "$(id -u)" -ne 0 ]; then
+    check 'first(.checks[] | select(.id == "linger")).status == "ok"'
+    check "first(.checks[] | select(.id == \"runtime-dir\")) | .status == \"ok\" and .message == \"XDG_RUNTIME_DIR is ${XDG_RUNTIME_DIR}\""
+    check 'first(.checks[] | select(.id == "user-bus")) | .status == "warn" and (.fix | contains("dbus-user-session"))'
+fi
+
+lpod_status doctor
+exited_with 0
+if grep -q "✓ Podman 6.2.0 with Quadlet" <<< "$OUTPUT"; then pass; else fail "doctor's text output lacks the Podman check: ${OUTPUT}"; fi
+
+test_case "doctor finds problems"
+printf 'glance.service\nstry-ondemand.socket\napp-nvidia\\x2dsettings\\x2dload@autostart.service\n' > "${LPOD_TEST_HOST}/failed-units"
+echo vfs > "${LPOD_TEST_HOST}/storage-driver"
+echo no > "${LPOD_TEST_HOST}/linger"
+lpod_status doctor --json
+check 'first(.checks[] | select(.id == "failed-services")) | .status == "warn" and .message == "These applications'"'"' services have failed: glance.service stry-ondemand.socket (1 other unit(s) failed: app-nvidia\\x2dsettings\\x2dload@autostart.service)"'
+check 'first(.checks[] | select(.id == "storage")) | .status == "warn" and (.fix | contains("podman system reset"))'
+
+if [ "$(id -u)" -ne 0 ]; then
+    check 'first(.checks[] | select(.id == "linger")) | .status == "warn" and (.fix | startswith("loginctl enable-linger"))'
+    XDG_RUNTIME_DIR="" lpod_status doctor --json
+    exited_with 1
+    check 'first(.checks[] | select(.id == "runtime-dir")).status == "fail" and ([.checks[] | select(.id == "user-bus")] == []) and .failures >= 1'
+fi
 
 echo "${PASSED} passed, ${FAILED} failed"
 

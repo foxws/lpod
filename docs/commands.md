@@ -311,12 +311,19 @@ The `tests/fixtures/contract-1` folder holds an example payload for each command
 `lpod doctor` checks:
 
 - that Podman 6.0 or newer runs, with the `podman quadlet` command;
+- that the host uses cgroup v2, which Quadlet needs;
+- which storage driver Podman uses, with a warning for `vfs`, which copies every image layer;
 - that jq is installed, for the [JSON commands](#json-contract);
 - that the systemd manager is reachable;
-- for rootless services: linger, your entries in `/etc/subuid` and `/etc/subgid`, and whether containers may publish ports 80 and 443 for the proxy (`net.ipv4.ip_unprivileged_port_start`);
-- that the host trusts the proxy's local certificate, when the proxy runs;
+- for rootless services:
+  - linger;
+  - that `XDG_RUNTIME_DIR` is a directory you own, and that the user's D-Bus runs there;
+  - that the `memory` and `pids` cgroup controllers are delegated to your user, for limits and their stats;
+  - your entries in `/etc/subuid` and `/etc/subgid`;
+  - whether containers may publish ports 80 and 443 for the proxy (`net.ipv4.ip_unprivileged_port_start`);
+- that the host trusts the proxy's local certificate, when the proxy (`pods-proxy`, or an older `proxy`) runs;
 - that the host in `APP_URL`, from the `.env` in the current directory, resolves;
-- that no services have failed.
+- that no application's services have failed: the services of its Quadlets, and its on-demand socket and services. Other failed units, such as a desktop's, are listed without counting as a warning.
 
 It changes nothing. It prints how to fix each problem, and the commands that need root are for you to run. It exits with an error when it finds something that stops the services from running, and succeeds on warnings.
 
