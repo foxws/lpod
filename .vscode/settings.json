@@ -1,0 +1,34 @@
+{
+    // The checks CI runs (see .github/workflows/tests.yml), while you edit.
+    "files.insertFinalNewline": true,
+    "files.trimTrailingWhitespace": true,
+
+    // Bash: four spaces, as in bin/lpod, and shellcheck on every file the
+    // tests.yml job checks, including the stand-ins without an extension.
+    "[shellscript]": {
+        "editor.insertSpaces": true,
+        "editor.tabSize": 4
+    },
+    "files.associations": {
+        "**/bin/lpod": "shellscript",
+        "**/tests/stubs/*": "shellscript"
+    },
+    "shellcheck.run": "onSave",
+
+    // Go: gofmt and organised imports on save, and golangci-lint with this
+    // repository's .golangci.yml.
+    "[go]": {
+        "editor.formatOnSave": true,
+        "editor.codeActionsOnSave": {
+            "source.organizeImports": "explicit"
+        }
+    },
+    "go.lintTool": "golangci-lint-v2",
+    "go.lintOnSave": "package",
+    "go.testFlags": ["-race"],
+    "gopls": {
+        "build.env": {
+            "CGO_ENABLED": "0"
+        }
+    }
+}
