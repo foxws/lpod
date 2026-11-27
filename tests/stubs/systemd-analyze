@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# A stand-in for "systemd-analyze calendar|timespan -- VALUE": it accepts the
+# keywords and the plain forms of systemd.time(7) ("daily", "Mon *-*-* 03:00",
+# "*:0/15", "90s", "1h 30min") and refuses anything else. Every call is
+# logged to LPOD_TEST_LOG...
+
+echo "systemd-analyze $*" >> "${LPOD_TEST_LOG:?}"
+
+KIND="${1:-}"
+[ "${2:-}" == "--" ] && shift
+VALUE="${2:-}"
+
+DAY='(Mon|Tue|Wed|Thu|Fri|Sat|Sun)([.,-](Mon|Tue|Wed|Thu|Fri|Sat|Sun))*'
+DATE='[0-9*]+-[0-9*]+-[0-9*/,.]+'
+TIME='[0-9*]+:[0-9*/,]+(:[0-9*/,]+)?'
+UNIT='(us|ms|s|sec|m|min|h|hr|d|w)'
+
+case "$KIND" in
+    calendar)
+        [[ "$VALUE" =~ ^(minutely|hourly|daily|weekly|monthly|quarterly|semiannually|yearly)$ ]] \
+            || [[ "$VALUE" =~ ^(${DAY}\ )?(${DATE}\ )?${TIME}$ ]] \
+            || [[ "$VALUE" =~ ^(${DAY}\ )?${DATE}$ ]]
+        ;;
+    timespan) [[ "$VALUE" =~ ^[0-9]+(\.[0-9]+)?\ ?${UNIT}?(\ [0-9]+(\.[0-9]+)?\ ?${UNIT})*$ ]] ;;
+    *) echo "systemd-analyze stub: unexpected call: $*" >&2; exit 1 ;;
+esac
