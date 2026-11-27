@@ -1,11 +1,11 @@
 # lpod
 
-lpod runs Podman Quadlet applications on a host. [Pods](https://github.com/foxws/pods) runs its `--json` commands over SSH, and people use the rest directly. It's being ported from a bash script (`bin/lpod`) to Go, one command at a time, as planned in [#59](https://github.com/foxws/lpod/issues/59).
+lpod runs Podman Quadlet applications on a host. [Pods](https://github.com/foxws/pods) runs its `--json` commands over SSH, and people use the rest directly. It's being rewritten from a bash script (`bin/lpod`) in Go, one command at a time, as planned in [#59](https://github.com/foxws/lpod/issues/59).
 
 ## Layout
 
 - `bin/lpod`: the bash script, which still implements every command. The release workflow replaces `LPOD_VERSION`, and `LPOD_CONTRACT` is the version of the JSON contract.
-- `cmd/lpod` and `internal/`: the Go port. The binary hands every command it doesn't implement yet to the bash script, installed next to it as `lpod.sh` (`internal/handoff`).
+- `cmd/lpod` and `internal/`: the Go rewrite. The binary hands every command it doesn't implement yet to the bash script, installed next to it as `lpod.sh` (`internal/handoff`).
 - `.devcontainer/`: a development container with Go, shellcheck, jq and gh.
 - `install.sh`: the installer, which `lpod self-update` also runs. It checks every download against the release's `SHA256SUMS`.
 - `docs/commands.md`: the reference for every command and its JSON output.
@@ -21,6 +21,7 @@ lpod runs Podman Quadlet applications on a host. [Pods](https://github.com/foxws
 - Every `--json` command prints one JSON object with `contract`. A command that only changes something prints `{"contract": 1, "ok": true}` (`json_ok`). Errors go to stderr with a non-zero exit code, and Pods shows that text.
 - Pods parses these payloads, and its tests keep a copy of `tests/fixtures/contract-1` in `tests/Fixtures/lpod/contract-1`. Keep both copies the same.
 - Adding a key doesn't change the contract. Renaming, removing or changing the type of one is a breaking change, which bumps `LPOD_CONTRACT`. Pods refuses a contract it doesn't know.
+- Pods and lpod change together, and Pods is young, so breaking changes are fine when they make the contract better. Make them on purpose: bump `LPOD_CONTRACT`, add the new fixtures, and change Pods with them.
 - A new command or key also updates its fixture, `docs/commands.md`, and `tests/run.sh`.
 - Pods pins the lpod release it needs (`PODS_LPOD_VERSION`, and `LPOD_REF` in its `install.sh`), and treats a command an older lpod lacks as unsupported. So Pods only uses a new command after a release.
 
@@ -39,9 +40,10 @@ Follow the code around your change:
 
 ## Go
 
-The port follows the plan in [#59](https://github.com/foxws/lpod/issues/59): rootless first, one command at a time, straight to `main`.
+lpod in Go is a rewrite from the ground up, not a translation of the bash script, following the plan in [#59](https://github.com/foxws/lpod/issues/59): rootless first, one command at a time, straight to `main`.
 
-- **Porting a command:** the Go binary handles it, and only then is the bash version removed. The command keeps the exact JSON output and exit codes, and `tests/run.sh` must still pass through the binary.
+- **Rewriting a command:** design it on its own merits, and fix what's wrong with the bash version (see "Found in phase 0" in #59) instead of carrying it over. The Go binary handles the command, and only then is the bash version removed.
+- **`tests/run.sh` is the reference:** it runs through the binary, and the Go version passes it. Where Go deliberately behaves differently, change the case (and the fixture, for a contract change) in the same PR, and say so under "Behavior changes, for the release notes".
 - **Dependencies:** prefer well-maintained modules over lpod's own logic, such as go-systemd and Podman's own packages. Build without cgo (`CGO_ENABLED=0`), so the binary stays static.
 - **Code copied from another project,** such as lerd, keeps that project's license notice.
 - **Checks:** `gofmt`, `go vet`, golangci-lint (`.golangci.yml`), `govulncheck` and `go test -race ./...` all run in CI, next to shellcheck and `tests/run.sh`.

@@ -16,7 +16,7 @@ Pairs naturally with [Pods](https://github.com/foxws/pods), a web UI that manage
 curl -fsSL https://github.com/foxws/lpod/releases/latest/download/install.sh | bash
 ```
 
-Installs `lpod` to `~/.local/bin`, verified against the release's checksums. Upgrade with `lpod self-update`. No PHP or Composer required. lpod is being ported from bash to Go ([#59](https://github.com/foxws/lpod/issues/59)): on amd64 and arm64 it's a Go binary with the bash script next to it as `lpod.sh`. See [Installation](docs/installation.md) for pinning a release, installing by hand, and a shell alias.
+Installs `lpod` to `~/.local/bin`, verified against the release's checksums. Upgrade with `lpod self-update`. No PHP or Composer required. lpod is being rewritten in Go ([#59](https://github.com/foxws/lpod/issues/59)): on amd64 and arm64 it's a Go binary with the bash script next to it as `lpod.sh`. See [Installation](docs/installation.md) for pinning a release, installing by hand, and a shell alias.
 
 ## Usage
 
