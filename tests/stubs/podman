@@ -41,6 +41,9 @@ case "$*" in
     "auto-update --dry-run --format json") cat "$HOST/auto-update.json" ;;
     "volume inspect --all") cat "$HOST/volumes.json" ;;
     "network ls --format json") cat "$HOST/networks.json" ;;
+    "events --stream=false "*) cat "$HOST/events.jsonl" ;;
+    "info --format "*) printf '%s\t%s\t%s\n' "${HOST}/storage" overlay netavark ;;
+    "version --format "*) echo "6.2.0" ;;
     "pull --quiet "*) cp "$HOST/images-pulled.json" "$HOST/images.json" ;;
     "container inspect --format "*) shift 3; inspect_containers table "$@" ;;
     "container inspect "*) shift 2; inspect_containers "" "$@" ;;

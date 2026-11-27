@@ -1,0 +1,4 @@
+Id=stry-backup.timer
+ActiveState=active
+NextElapseUSecRealtime=@1795003600
+LastTriggerUSec=@1794990000

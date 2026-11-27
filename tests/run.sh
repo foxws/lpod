@@ -28,9 +28,10 @@ FAILED=0
 # Starts the test NAME on a fresh copy of the host...
 function test_case {
     TEST="$1"
-    rm -rf "$LPOD_TEST_HOST" "$XDG_CACHE_HOME"
-    mkdir -p "$HOME"
+    rm -rf "$LPOD_TEST_HOST" "$XDG_CACHE_HOME" "$XDG_CONFIG_HOME"
+    mkdir -p "$HOME" "${XDG_CONFIG_HOME}/systemd/user"
     cp -r "${ROOT}/tests/host" "$LPOD_TEST_HOST"
+    cp "${LPOD_TEST_HOST}/systemd/"* "${XDG_CONFIG_HOME}/systemd/user/"
     : > "$LPOD_TEST_LOG"
 }
 
@@ -186,6 +187,44 @@ calls "$QUADLET_LIST" 1
 calls "$PODMAN_PS" 1
 lpod glance status --json
 check '.application | .status == "failed" and .error == "Error: config: glance.yml: no such file or directory"'
+
+test_case "times and ports of the listings"
+lpod images --json
+check 'first(.images[] | select(.repository == "ghcr.io/francoism90/stry")).created_at == "2026-11-18T11:06:40+00:00"'
+lpod containers --json
+check 'first(.containers[] | select(.name == "stry-app")).started_at == "2026-11-18T11:06:40+00:00"'
+check 'first(.containers[] | select(.name == "systemd-glance")).started_at == null'
+check 'first(.containers[] | select(.name == "scratch")) | .started_at == null and .pod == "scratch-pod"'
+check '[.containers[].name] | index("5555-infra") == null'
+lpod container stry-app inspect --json
+check '.container.created_at == "2026-11-26T10:00:00Z"'
+lpod container scratch inspect --json
+check '.container.created_at == null'
+lpod apps --json
+check 'first(.applications[] | select(.name == "stry")).since == "2026-11-18T11:06:40+00:00"'
+lpod pods --json
+check '.pods == [{"id": "555555555555", "name": "scratch-pod", "status": "degraded", "application": null, "quadlet": null, "unit": null, "containers": 1, "running": 0, "ports": ["127.0.0.1:9000->80/tcp"], "networks": ["podman"], "created_at": "2026-11-17T10:00:00Z"}]'
+
+test_case "journal and events"
+lpod journal --json
+check '.entries[0] == {"time": "2026-11-18T11:06:40+00:00", "unit": "glance", "priority": 3, "message": "Error: config: glance.yml: no such file or directory"}'
+check '.entries[1] | .time == "2026-11-18T12:06:40+00:00" and .message == "Started"'
+lpod events --json
+check '[.events[] | {time, action, application}] == [
+    {"time": "2026-11-18T11:06:40+00:00", "action": "died", "application": "glance"},
+    {"time": "2026-11-18T08:20:00+00:00", "action": "pull", "application": null}
+]'
+check '.events[0].exit_code == 1'
+
+test_case "systemd timers"
+lpod settings --json
+check '.settings.auto_update == {"enabled": true, "schedule": "*-*-* 03:00:00", "rollback": true, "next_run": "2026-11-18T12:06:40+00:00", "last_run": null}'
+lpod stry timers --json
+check '.timers[0] | .name == "backup" and .enabled and .running and .next_run == "2026-11-18T12:06:40+00:00" and .last_run == "2026-11-18T08:20:00+00:00" and .last_result == null'
+lpod host --json
+check '.auto_update == {"enabled": true, "next_run": "2026-11-18T12:06:40+00:00"}'
+check '.system.booted_at | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\+00:00$")'
+check '.units == {"active": 2, "failed": 1}'
 
 echo "${PASSED} passed, ${FAILED} failed"
 

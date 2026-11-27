@@ -759,6 +759,34 @@ function quadlet_sources_json {
     done < <(jq -r '.[] | [.Name, .Path] | @tsv' <<< "$UNITS") | jq -s 'unique_by(.name)'
 }
 
+# The jq definitions the "--json" commands share, which a program puts first,
+# as in jq "${LPOD_JQ}"'...'...
+read -r -d '' LPOD_JQ <<'JQ'
+# Seconds since the epoch as the contract's UTC time...
+def timestamp: strftime("%Y-%m-%dT%H:%M:%S+00:00");
+# Seconds since the epoch, as a number or a string, or null...
+def iso: if . == null then null else (tonumber | timestamp) end;
+# A time of "systemctl show --timestamp=unix" ("@SECONDS"), which is empty,
+# "n/a" or "0" when there is none...
+def systemd_iso: if . == null or . == "" or . == "n/a" or . == "0" then null else (ltrimstr("@") | iso) end;
+# A time of Podman's own, without its fraction of a second. Podman's zero
+# time ("0001-01-01...") is none...
+def podman_time: if . == null or . == "" or startswith("0001-") then null else sub("\\.[0-9]+"; "") end;
+# The properties of one unit in "systemctl show" output, as an object...
+def properties: split("\n") | map(select(contains("=")) | capture("^(?<key>[^=]+)=(?<value>.*)$")) | from_entries;
+# The values of the directive KEY in the Quadlet CONTENT, in order...
+def directives($content; $key): $content | split("\n") | map(select(startswith($key + "=")) | ltrimstr($key + "=") | sub("\\s+$"; ""));
+def directive($content; $key): directives($content; $key) | last;
+# The "Ports" of "podman ps" as "IP:HOST->CONTAINER/PROTOCOL"...
+def published_ports: [(. // [])[] | "\(if (.host_ip // "") == "" then "0.0.0.0" else .host_ip end):\(.host_port)->\(.container_port)/\(.protocol // "tcp")"];
+JQ
+
+# The source of the Quadlet NAME, for a program that has bound $sources to
+# the JSON of quadlet_sources_json before it...
+read -r -d '' LPOD_SOURCES_JQ <<'JQ'
+def source($name): first($sources[] | select(.name == $name) | .content) // "";
+JQ
+
 # Prints the systemd state of the services of UNITS as JSON...
 function unit_states_json {
     local UNITS="$1"
@@ -775,10 +803,8 @@ function unit_states_json {
         return
     fi
 
-    "${SYSTEMCTL_CMD[@]}" show "${SERVICES[@]}" --property=Id,ActiveState,SubState,Result,StateChangeTimestamp --timestamp=unix | jq -Rs '
-        split("\n\n")
-        | map(split("\n") | map(select(contains("=")) | capture("^(?<key>[^=]+)=(?<value>.*)$")) | from_entries)
-        | map(select(.Id != null))'
+    "${SYSTEMCTL_CMD[@]}" show "${SERVICES[@]}" --property=Id,ActiveState,SubState,Result,StateChangeTimestamp --timestamp=unix | jq -Rs "${LPOD_JQ}"'
+        split("\n\n") | map(properties) | map(select(.Id != null))'
 }
 
 # Prints the CPU and memory use of the running containers as JSON...
@@ -789,10 +815,6 @@ function container_stats_json {
 # The jq definitions that turn the collected units, sources, states and
 # containers (host_containers_json, with their stats) into applications...
 read -r -d '' LPOD_APPLICATIONS_JQ <<'JQ'
-def source($name): first($sources[] | select(.name == $name) | .content) // "";
-def directives($content; $key): $content | split("\n") | map(select(startswith($key + "=")) | ltrimstr($key + "=") | sub("\\s+$"; ""));
-def directive($content; $key): directives($content; $key) | last;
-def iso: if . == null or . == "" or . == "n/a" then null else (ltrimstr("@") | tonumber | strftime("%Y-%m-%dT%H:%M:%S+00:00")) end;
 def status: if . == "active" then "running" elif . == null then "unknown" else . end;
 def port: (capture("^((?<ip>.+):)?(?<host>[0-9-]+):(?<container>[0-9-]+)(/(?<protocol>[a-z]+))?$") // null)
     | if . == null then empty else "\(.ip // "0.0.0.0"):\(.host)->\(.container)/\(.protocol // "tcp")" end;
@@ -828,7 +850,7 @@ def application:
         kind: $main.ext,
         status: ($state.ActiveState | status),
         result: ($state.Result // null),
-        since: ($state.StateChangeTimestamp | iso),
+        since: ($state.StateChangeTimestamp | systemd_iso),
         image: ((first($running[] | select(.unit == $primary.UnitName) | .image)) // (if $primary == null then null else image($primary) end)),
         pods: (($pods | length) + ($kubes | length)),
         containers: (if $main.ext == "kube" then ($running | length) else ($containers | length) end),
@@ -878,7 +900,7 @@ function applications_json {
         --slurpfile sources <(printf '%s' "$SOURCES") \
         --slurpfile states <(printf '%s' "$STATES") \
         --slurpfile ps <(printf '%s' "$CONTAINERS") \
-        "\$units[0] as \$units | \$sources[0] as \$sources | \$states[0] as \$states | \$ps[0] as \$ps | ${LPOD_APPLICATIONS_JQ} \$units | group_by(.app) | map(application)")" || return 1
+        "\$units[0] as \$units | \$sources[0] as \$sources | \$states[0] as \$states | \$ps[0] as \$ps | ${LPOD_JQ} ${LPOD_SOURCES_JQ} ${LPOD_APPLICATIONS_JQ} \$units | group_by(.app) | map(application)")" || return 1
 
     # The last error of each failed main unit, as "UNIT<tab>MESSAGE" lines.
     # "--lines" counts across every unit given, so each unit gets its own
@@ -1022,8 +1044,8 @@ function cmd_host {
         --arg quadlet_dir "$(home_path "$(quadlet_unit_path)")" \
         --arg linger "$(linger_state)" \
         --slurpfile states <(printf '%s' "${STATES:-[]}") \
-        '$containers[0] as $containers | $states[0] as $states
-        | ($timer | split("\n") | map(select(contains("=")) | capture("^(?<key>[^=]+)=(?<value>.*)$")) | from_entries) as $timer
+        "${LPOD_JQ}"'$containers[0] as $containers | $states[0] as $states
+        | ($timer | properties) as $timer
         | def nonempty: if . == "" then null else . end;
         {
             contract: $contract,
@@ -1033,12 +1055,12 @@ function cmd_host {
             containers: {running: $containers[0], total: $containers[1]},
             auto_update: {
                 enabled: ($timer.ActiveState == "active"),
-                next_run: (($timer.NextElapseUSecRealtime // "") | if . == "" or . == "n/a" then null else (ltrimstr("@") | tonumber | strftime("%Y-%m-%dT%H:%M:%S+00:00")) end)
+                next_run: ($timer.NextElapseUSecRealtime | systemd_iso)
             },
             system: {
                 os: ($os | nonempty),
                 kernel: ($kernel | nonempty),
-                booted_at: ($booted | if . == "" then null else (tonumber | strftime("%Y-%m-%dT%H:%M:%S+00:00")) end),
+                booted_at: ($booted | if . == "" then null else iso end),
                 storage_driver: ($storage_driver | nonempty),
                 network_backend: ($network_backend | nonempty),
                 quadlet_dir: $quadlet_dir,
@@ -2457,20 +2479,18 @@ function timers_with_state {
     while IFS=$'\t' read -r NAME SERVICE; do
         STATES+=("$(jq -n --arg name "$NAME" \
             --arg timer "$("${SYSTEMCTL_CMD[@]}" show "${APP_NAME}-${NAME}.timer" --property=ActiveState,NextElapseUSecRealtime,LastTriggerUSec --timestamp=unix 2> /dev/null)" \
-            --arg service "$("${SYSTEMCTL_CMD[@]}" show "$SERVICE" --property=ActiveState,Result 2> /dev/null)" '
-            def props: split("\n") | map(select(contains("=")) | capture("^(?<key>[^=]+)=(?<value>.*)$")) | from_entries;
-            {name: $name, timer: ($timer | props), service: ($service | props)}')")
+            --arg service "$("${SYSTEMCTL_CMD[@]}" show "$SERVICE" --property=ActiveState,Result 2> /dev/null)" "${LPOD_JQ}"'
+            {name: $name, timer: ($timer | properties), service: ($service | properties)}')")
     done < <(jq -r '.[] | [.name, .service] | @tsv' <<< "$SETTINGS")
 
-    printf '%s\n' "${STATES[@]}" | jq -s --argjson settings "$SETTINGS" --arg app "$APP_NAME" '
-        def iso: if . == null or . == "" or . == "n/a" or . == "0" then null else (ltrimstr("@") | tonumber | strftime("%Y-%m-%dT%H:%M:%S+00:00")) end;
+    printf '%s\n' "${STATES[@]}" | jq -s --argjson settings "$SETTINGS" --arg app "$APP_NAME" "${LPOD_JQ}"'
         map({key: .name, value: .}) | from_entries as $states
         | $settings | map(. as $timer | ($states[$timer.name] // {timer: {}, service: {}}) as $state
-            | ($state.timer.LastTriggerUSec | iso) as $last
+            | ($state.timer.LastTriggerUSec | systemd_iso) as $last
             | {name, unit: "\($app)-\(.name).timer", container, service, on_calendar, persistent, randomized_delay_sec, timeout_start_sec,
                 enabled: ($state.timer.ActiveState == "active"),
                 running: (($state.service.ActiveState // "") | IN("active", "activating", "reloading")),
-                next_run: ($state.timer.NextElapseUSecRealtime | iso),
+                next_run: ($state.timer.NextElapseUSecRealtime | systemd_iso),
                 last_run: $last,
                 last_result: (if $last == null or (($state.service.ActiveState // "") | IN("active", "activating")) then null else ($state.service.Result // null) end)})'
 }
@@ -3369,7 +3389,7 @@ function cmd_app_json {
 # Turns "journalctl --output=json" lines on stdin into contract entries...
 read -r -d '' LPOD_JOURNAL_JQ <<'JQ'
 map({
-    time: (.__REALTIME_TIMESTAMP | tonumber / 1000000 | floor | strftime("%Y-%m-%dT%H:%M:%S+00:00")),
+    time: (.__REALTIME_TIMESTAMP | tonumber / 1000000 | floor | timestamp),
     unit: (((._SYSTEMD_USER_UNIT // ._SYSTEMD_UNIT) as $unit | if $unit == null or $unit == "init.scope" or ($unit | startswith("user@")) then (.USER_UNIT // .UNIT // $unit) else $unit end) // "" | sub("\\.service$"; "")),
     priority: ((.PRIORITY // "6") | tonumber),
     message: ((.MESSAGE // "") | if type == "array" then implode else . end | rtrimstr("\n"))
@@ -3384,7 +3404,7 @@ function journal_entries_json {
         SCOPE=(--user)
     fi
 
-    journalctl "${SCOPE[@]}" "$@" --output=json --no-pager | jq -s "$LPOD_JOURNAL_JQ"
+    journalctl "${SCOPE[@]}" "$@" --output=json --no-pager | jq -s "${LPOD_JQ}${LPOD_JOURNAL_JQ}"
 }
 
 # Checks that a "--lines" value is a number from 1 to 99999...
@@ -3436,9 +3456,8 @@ function host_containers_json {
     jq -n \
         --slurpfile units <(printf '%s' "$UNITS") \
         --slurpfile ps <(printf '%s' "$PS") \
-        --slurpfile stats <(printf '%s' "${STATS:-[]}") '
+        --slurpfile stats <(printf '%s' "${STATS:-[]}") "${LPOD_JQ}"'
         $units[0] as $units | $ps[0] as $ps | $stats[0] as $stats |
-        def iso: if . == null or . == 0 then null else (tonumber | strftime("%Y-%m-%dT%H:%M:%S+00:00")) end;
         $ps
         | map(select((.IsInfra // false) | not))
         | map(
@@ -3457,10 +3476,10 @@ function host_containers_json {
                 quadlet: ($unit.Name // null),
                 unit: (if $unit == null then null else $unit_name end),
                 pod: (if (.PodName // "") == "" then null else .PodName end),
-                ports: [(.Ports // [])[] | "\(if (.host_ip // "") == "" then "0.0.0.0" else .host_ip end):\(.host_port)->\(.container_port)/\(.protocol // "tcp")"],
+                ports: (.Ports | published_ports),
                 cpu: (if .State == "running" then ($use.cpu // null) else null end),
                 memory: (if .State == "running" then ($use.memory // null) else null end),
-                started_at: (if .State == "running" then (.StartedAt | iso) else null end)
+                started_at: (if .State == "running" and (.StartedAt // 0) != 0 then (.StartedAt | iso) else null end)
             })
         | sort_by(.application == null, .application, .name)'
 }
@@ -3535,17 +3554,16 @@ function cmd_container_json {
                 --slurpfile summary <(printf '%s' "$SUMMARY") \
                 --slurpfile inspect <(printf '%s' "$INSPECT") \
                 --rawfile source <(printf '%s' "$SOURCE") \
-                --arg restarts "${RESTARTS:-}" '
+                --arg restarts "${RESTARTS:-}" "${LPOD_JQ}"'
                 $summary[0] as $summary | $inspect[0] as $inspect |
-                def directives($key): $source | split("\n") | map(select(startswith($key + "=")) | ltrimstr($key + "=") | sub("\\s+$"; ""));
-                def time: if . == null or . == "" or (startswith("0001-")) then null else sub("\\.[0-9]+"; "") end;
+                def directives($key): directives($source; $key);
                 def unquote: if (startswith("\"") and endswith("\"")) then .[1:-1] else . end;
                 ($inspect[0]) as $c
                 | ($c.Config.Healthcheck // null) as $check
                 | {
                     contract: $contract,
                     container: ($summary + {
-                        created_at: ($c.Created | time),
+                        created_at: ($c.Created | podman_time),
                         memory_limit: (if ($c.HostConfig.Memory // 0) > 0 then $c.HostConfig.Memory else null end),
                         restart_policy: (if $source != "" then (directives("Restart") | last // "no") else ($c.HostConfig.RestartPolicy.Name // null | if . == "" then null else . end) end),
                         restarts: (if $restarts != "" then ($restarts | tonumber) else ($c.RestartCount // 0) end),
@@ -3555,7 +3573,7 @@ function cmd_container_json {
                         health_check: (if $check == null or ($check.Test // []) == [] or $check.Test[0] == "NONE" then null else {
                             command: ($check.Test[1:] | join(" ")),
                             interval: (if ($check.Interval // 0) > 0 then "\($check.Interval / 1000000000 | floor)s" else null end),
-                            last_check: (($c.State.Health.Log // []) | last | .End // null | time)
+                            last_check: (($c.State.Health.Log // []) | last | .End // null | podman_time)
                         } end),
                         mounts: [($c.Mounts // [])[] | {
                             type: .Type,
@@ -3741,9 +3759,8 @@ function cmd_images_json {
         --slurpfile images <(printf '%s' "$IMAGES") \
         --slurpfile containers <(printf '%s' "$CONTAINERS") \
         --slurpfile inspect <(printf '%s' "$INSPECT") \
-        --slurpfile updates <(printf '%s' "${UPDATES:-[]}") '
+        --slurpfile updates <(printf '%s' "${UPDATES:-[]}") "${LPOD_JQ}"'
         $images[0] as $images | $containers[0] as $containers | $inspect[0] as $inspect | $updates[0] as $updates |
-        def iso: if . == null then null else (tonumber | strftime("%Y-%m-%dT%H:%M:%S+00:00")) end;
         ($inspect | map({name: .Name, image: .Image, auto_update: (.Config.Labels["io.containers.autoupdate"] // null)})) as $uses
         | {
             contract: $contract,
@@ -3885,10 +3902,9 @@ function cmd_pods_json {
         --argjson contract "$LPOD_CONTRACT" \
         --slurpfile pods <(printf '%s' "${PODS:-[]}") \
         --slurpfile ps <(printf '%s' "${PS:-[]}") \
-        --slurpfile units <(printf '%s' "${UNITS:-[]}") '
+        --slurpfile units <(printf '%s' "${UNITS:-[]}") "${LPOD_JQ}"'
         $pods[0] as $pods | $ps[0] as $ps | $units[0] as $units
         | def unit($name): if $name == null then null else first($units[] | select(.UnitName == $name)) // null end;
-        def time: if . == null or . == "" then null else sub("\\.[0-9]+"; "") end;
         ($pods // [])
         | map(
             . as $pod
@@ -3906,9 +3922,9 @@ function cmd_pods_json {
                 unit: ($own.UnitName // null),
                 containers: ($containers | length),
                 running: ($containers | map(select(.State == "running")) | length),
-                ports: [($infra.Ports // [])[] | "\(if (.host_ip // "") == "" then "0.0.0.0" else .host_ip end):\(.host_port)->\(.container_port)/\(.protocol // "tcp")"],
+                ports: ($infra.Ports | published_ports),
                 networks: (.Networks // []),
-                created_at: (.Created | time)
+                created_at: (.Created | podman_time)
             })
         | sort_by(.application == null, .application, .name)
         | {contract: $contract, pods: .}'
@@ -3960,15 +3976,14 @@ function cmd_events_json {
     jq -s \
         --argjson contract "$LPOD_CONTRACT" \
         --argjson limit "$LIMIT" \
-        --slurpfile units <(printf '%s' "${UNITS:-[]}") '
+        --slurpfile units <(printf '%s' "${UNITS:-[]}") "${LPOD_JQ}"'
         ($units[0] | map({key: .UnitName, value: .app}) | from_entries) as $apps
-        | def iso: if . == null then null else (. / 1000000000 | floor | strftime("%Y-%m-%dT%H:%M:%S+00:00")) end;
-        map(select(
+        | map(select(
             (.Type == "container" and (.Status | IN("start", "stop", "died", "remove", "restart")))
             or (.Type == "image" and (.Status | IN("pull", "remove")))
         ))
         | map((.Attributes // {}) as $labels | {
-            time: (.timeNano // null | iso),
+            time: (.timeNano // null | if . == null then null else (. / 1000000000 | floor | iso) end),
             type: .Type,
             action: .Status,
             name: (if .Type == "image" then (.Name // .ID) else .Name end),
@@ -4041,10 +4056,9 @@ function cmd_volumes_json {
         --slurpfile units <(printf '%s' "$UNITS") \
         --slurpfile sources <(printf '%s' "$SOURCES") \
         --slurpfile containers <(printf '%s' "$CONTAINERS") \
-        --slurpfile inspect <(printf '%s' "$INSPECT") '
+        --slurpfile inspect <(printf '%s' "$INSPECT") "${LPOD_JQ}"'
         $volumes[0] as $volumes | $units[0] as $units | $sources[0] as $sources | $containers[0] as $containers | $inspect[0] as $inspect |
-        def source($name): first($sources[] | select(.name == $name) | .content) // "";
-        def directive($content; $key): $content | split("\n") | map(select(startswith($key + "=")) | ltrimstr($key + "=") | sub("\\s+$"; "")) | last;
+        '"${LPOD_SOURCES_JQ}"'
         def app_of($name): first($containers[] | select(.name == $name) | .application) // null;
         ($units | map(select(.ext == "volume")) | map({name: (directive(source(.Name); "VolumeName") // "systemd-\(.base)"), quadlet: .Name})) as $volume_units
         | ($units | map(select(.ext == "container")) | map(.Name as $quadlet | source(.Name) | split("\n") | map(select(startswith("Volume=")) | ltrimstr("Volume=") | split(":")[0] // "" | select(test("^[A-Za-z0-9][A-Za-z0-9_.-]*$") and (endswith(".volume") | not)) | {name: ., quadlet: $quadlet})) | add // []) as $inline
@@ -4231,10 +4245,9 @@ function cmd_networks_json {
         --slurpfile units <(printf '%s' "$UNITS") \
         --slurpfile sources <(printf '%s' "$SOURCES") \
         --slurpfile containers <(printf '%s' "$CONTAINERS") \
-        --slurpfile inspect <(printf '%s' "$INSPECT") '
+        --slurpfile inspect <(printf '%s' "$INSPECT") "${LPOD_JQ}"'
         $networks[0] as $networks | $units[0] as $units | $sources[0] as $sources | $containers[0] as $containers | $inspect[0] as $inspect |
-        def source($name): first($sources[] | select(.name == $name) | .content) // "";
-        def directive($content; $key): $content | split("\n") | map(select(startswith($key + "=")) | ltrimstr($key + "=") | sub("\\s+$"; "")) | last;
+        '"${LPOD_SOURCES_JQ}"'
         def app_of($name): first($containers[] | select(.name == $name) | .application) // null;
         ($units | map(select(.ext == "network")) | map({name: (directive(source(.Name); "NetworkName") // "systemd-\(.base)"), quadlet: .Name})) as $network_units
         | ($units | map(select(.ext == "container" or .ext == "pod")) | map(.app as $app | source(.Name) | split("\n") | map(select(startswith("Network=")) | ltrimstr("Network=") | split(":")[0] | {quadlet: ., app: $app})) | add // []) as $references
@@ -4791,11 +4804,9 @@ function cmd_app_remove_json {
     fi
 
     local OWNED
-    OWNED="$(jq -n --arg app "$APPLICATION" --slurpfile units <(printf '%s' "$UNITS") --slurpfile sources <(printf '%s' "$SOURCES") '
+    OWNED="$(jq -n --arg app "$APPLICATION" --slurpfile units <(printf '%s' "$UNITS") --slurpfile sources <(printf '%s' "$SOURCES") "${LPOD_JQ}"'
         $units[0] as $units | $sources[0] as $sources |
-        def source($name): first($sources[] | select(.name == $name) | .content) // "";
-        def directives($content; $key): $content | split("\n") | map(select(startswith($key + "=")) | ltrimstr($key + "=") | sub("\\s+$"; ""));
-        def directive($content; $key): directives($content; $key) | last;
+        '"${LPOD_SOURCES_JQ}"'
         def uses($unit; $key): directives(source($unit.Name); $key);
         # What others use is read as loosely as systemd does, since missing one loses its data...
         def kept($unit; $key): source($unit.Name) | split("\n")[] | capture("^\\s*" + $key + "\\s*=\\s*(?<value>.*)$").value | gsub("^[\"\u0027]|[\"\u0027]?\\s*$"; "");
@@ -4900,9 +4911,8 @@ function cmd_settings_show_json {
         --arg timer "$TIMER" \
         --argjson rollback "$ROLLBACK" \
         --arg linger "$(linger_state)" \
-        --arg quadlet_dir "$(home_path "$(quadlet_unit_path)")" '
-        def iso: if . == null or . == "" or . == "n/a" or . == "0" then null else (ltrimstr("@") | tonumber | strftime("%Y-%m-%dT%H:%M:%S+00:00")) end;
-        ($timer | split("\n") | map(select(contains("=")) | capture("^(?<key>[^=]+)=(?<value>.*)$")) | from_entries) as $timer
+        --arg quadlet_dir "$(home_path "$(quadlet_unit_path)")" "${LPOD_JQ}"'
+        ($timer | properties) as $timer
         | {
             contract: $contract,
             settings: {
@@ -4910,8 +4920,8 @@ function cmd_settings_show_json {
                     enabled: ($timer.ActiveState == "active"),
                     schedule: ([($timer.TimersCalendar // "") | capture("OnCalendar=(?<schedule>[^;]+?)\\s*;")] | first | .schedule // "daily"),
                     rollback: $rollback,
-                    next_run: ($timer.NextElapseUSecRealtime | iso),
-                    last_run: ($timer.LastTriggerUSec | iso)
+                    next_run: ($timer.NextElapseUSecRealtime | systemd_iso),
+                    last_run: ($timer.LastTriggerUSec | systemd_iso)
                 },
                 linger: (if $linger == "yes" then true elif $linger == "no" then false else null end),
                 quadlet_dir: $quadlet_dir
