@@ -20,3 +20,44 @@ jobs:
 
       - name: Run the tests against stubbed podman, systemctl and journalctl
         run: tests/run.sh
+
+  go:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      - name: gofmt
+        run: |
+          UNFORMATTED="$(gofmt -l .)"
+
+          if [ -n "$UNFORMATTED" ]; then
+            echo "Run gofmt -w on these files:"
+            echo "$UNFORMATTED"
+            exit 1
+          fi
+
+      - name: go vet
+        run: go vet ./...
+
+      - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
+        with:
+          version: v2.15.0
+
+      - name: govulncheck
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
+
+      - name: go test
+        run: go test -race ./...
+
+      # The same tests as the bash script, through the binary, which hands
+      # them to lpod.sh next to it...
+      - name: Run the tests against the binary
+        run: |
+          mkdir -p "${RUNNER_TEMP}/lpod"
+          CGO_ENABLED=0 go build -trimpath -o "${RUNNER_TEMP}/lpod/lpod" ./cmd/lpod
+          cp bin/lpod "${RUNNER_TEMP}/lpod/lpod.sh"
+          LPOD_UNDER_TEST="${RUNNER_TEMP}/lpod/lpod" tests/run.sh

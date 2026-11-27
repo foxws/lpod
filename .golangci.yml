@@ -1,0 +1,5 @@
+version: "2"
+
+# The standard linters: errcheck, govet, ineffassign, staticcheck and unused
+linters:
+  default: standard

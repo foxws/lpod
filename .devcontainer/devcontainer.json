@@ -1,0 +1,34 @@
+{
+    "name": "lpod",
+    // The first start builds .devcontainer/Containerfile; Rebuild Container
+    // builds it again.
+    "build": {
+        "dockerfile": "Containerfile",
+        "context": "."
+    },
+    "remoteUser": "docker",
+    "containerUser": "docker",
+    "runArgs": [
+        "--security-opt=label=disable",
+        "--userns=keep-id:uid=1000,gid=1000"
+    ],
+    "workspaceMount": "source=${localWorkspaceFolder},target=/workspace/lpod,type=bind",
+    "workspaceFolder": "/workspace/lpod",
+    "customizations": {
+        "vscode": {
+            "extensions": ["golang.go", "timonwong.shellcheck"]
+        }
+    },
+    "mounts": [
+        // Uncomment the host folders you want in the container. Podman won't
+        // start the container if a source folder doesn't exist on your host.
+        //
+        // GitHub CLI login:
+        // "source=${localEnv:HOME}/.config/gh,target=/home/docker/.config/gh,type=bind",
+        // Claude Code login (create ~/.claude.json with "touch" first):
+        // "source=${localEnv:HOME}/.claude,target=/home/docker/.claude,type=bind",
+        // "source=${localEnv:HOME}/.claude.json,target=/home/docker/.claude.json,type=bind",
+        // SSH keys for Git and for trying lpod on a host, read-only:
+        "source=${localEnv:HOME}/.ssh,target=/home/docker/.ssh,type=bind,ro=true"
+    ]
+}

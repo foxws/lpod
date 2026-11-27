@@ -7,7 +7,11 @@
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-LPOD="${ROOT}/bin/lpod"
+
+# The lpod to test: the bash script, or LPOD_UNDER_TEST, such as a Go build
+# with lpod.sh next to it. The tests run it from another directory, so a
+# relative path is made absolute...
+LPOD="$(realpath -s "${LPOD_UNDER_TEST:-${ROOT}/bin/lpod}")"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
