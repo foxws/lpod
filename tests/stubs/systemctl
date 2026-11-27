@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+# A stand-in for systemctl: "show" prints the units in LPOD_TEST_HOST/units,
+# every other call succeeds. Every call is logged to LPOD_TEST_LOG...
+
+HOST="${LPOD_TEST_HOST:?}"
+echo "systemctl $*" >> "${LPOD_TEST_LOG:?}"
+
+ARGS=()
+VALUE=false
+
+for ARG in "$@"; do
+    case "$ARG" in
+        --user|--timestamp=*|--property=*) ;;
+        --value) VALUE=true ;;
+        *) ARGS+=("$ARG") ;;
+    esac
+done
+
+if [ "${ARGS[0]:-}" != "show" ]; then
+    exit 0
+fi
+
+FIRST=true
+for UNIT in "${ARGS[@]:1}"; do
+    if [ "$FIRST" != true ]; then
+        echo
+    fi
+
+    FIRST=false
+
+    if [ -f "$HOST/units/$UNIT" ]; then
+        if [ "$VALUE" == true ]; then
+            sed -n 's/^NRestarts=//p' "$HOST/units/$UNIT"
+        else
+            cat "$HOST/units/$UNIT"
+        fi
+    else
+        printf 'Id=%s\nActiveState=inactive\nSubState=dead\nResult=success\n' "$UNIT"
+    fi
+done

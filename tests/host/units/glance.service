@@ -1,0 +1,6 @@
+Id=glance.service
+ActiveState=failed
+SubState=failed
+Result=exit-code
+StateChangeTimestamp=@1795001000
+NRestarts=3

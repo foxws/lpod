@@ -1,0 +1,4 @@
+[
+    {"Name": "stry-data", "Driver": "local", "Mountpoint": "/volumes/stry-data/_data", "Options": {}, "Anonymous": false},
+    {"Name": "f00dcafe", "Driver": "local", "Mountpoint": "/volumes/f00dcafe/_data", "Options": {}, "Anonymous": true}
+]

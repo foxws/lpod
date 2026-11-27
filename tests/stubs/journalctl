@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# A stand-in for journalctl: prints LPOD_TEST_HOST/journal/UNIT for "-u UNIT",
+# and logs every call to LPOD_TEST_LOG...
+
+HOST="${LPOD_TEST_HOST:?}"
+echo "journalctl $*" >> "${LPOD_TEST_LOG:?}"
+
+while [ $# -gt 0 ]; do
+    if [ "$1" == "-u" ] && [ -f "$HOST/journal/${2:-}" ]; then
+        cat "$HOST/journal/$2"
+    fi
+
+    shift
+done

@@ -1,0 +1,6 @@
+[
+    {"Id": "1111111111111111111111111111111111111111111111111111111111111111", "Names": ["stry-app"], "Image": "ghcr.io/francoism90/stry:4", "State": "running", "Status": "Up 2 hours (healthy)", "ExitCode": 0, "StartedAt": 1795000000, "Labels": {"PODMAN_SYSTEMD_UNIT": "stry-app.service"}, "Ports": [{"host_ip": "", "host_port": 8000, "container_port": 8080, "protocol": "tcp"}]},
+    {"Id": "2222222222222222222222222222222222222222222222222222222222222222", "Names": ["stry-valkey"], "Image": "docker.io/library/valkey:9", "State": "running", "Status": "Up 2 hours", "ExitCode": 0, "StartedAt": 1795000000, "Labels": {"PODMAN_SYSTEMD_UNIT": "stry-valkey.service"}},
+    {"Id": "3333333333333333333333333333333333333333333333333333333333333333", "Names": ["systemd-glance"], "Image": "docker.io/glanceapp/glance:latest", "State": "exited", "Status": "Exited (1) 5 minutes ago", "ExitCode": 1, "StartedAt": 1795000000, "Labels": {"PODMAN_SYSTEMD_UNIT": "glance.service"}},
+    {"Id": "4444444444444444444444444444444444444444444444444444444444444444", "Names": ["scratch"], "Image": "docker.io/library/valkey:9", "State": "exited", "Status": "Exited (0) 1 day ago", "ExitCode": 0, "StartedAt": 0, "Labels": {}}
+]

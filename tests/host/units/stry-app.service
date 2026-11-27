@@ -1,0 +1,6 @@
+Id=stry-app.service
+ActiveState=active
+SubState=running
+Result=success
+StateChangeTimestamp=@1795000000
+NRestarts=0

@@ -1,0 +1,5 @@
+[
+    {"Unit": "stry-app.service", "Container": "111111111111 (stry-app)", "ContainerName": "stry-app", "ContainerID": "1111111111111111111111111111111111111111111111111111111111111111", "Image": "ghcr.io/francoism90/stry:4", "Policy": "registry", "Updated": "false"},
+    {"Unit": "stry-valkey.service", "Container": "222222222222 (stry-valkey)", "ContainerName": "stry-valkey", "ContainerID": "2222222222222222222222222222222222222222222222222222222222222222", "Image": "docker.io/library/valkey:9", "Policy": "registry", "Updated": "pending"},
+    {"Unit": "gone.service", "Container": "999999999999 (gone)", "ContainerName": "gone", "ContainerID": "9999999999999999999999999999999999999999999999999999999999999999", "Image": "docker.io/library/gone:1", "Policy": "registry", "Updated": "pending"}
+]

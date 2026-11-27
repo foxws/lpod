@@ -41,6 +41,14 @@ Full documentation: browse [`docs/`](docs)
 - [Commands reference](docs/commands.md)
 - [Configuration](docs/configuration.md)
 
+## Testing
+
+```bash
+tests/run.sh
+```
+
+Runs the `--json` commands against stand-ins for `podman`, `systemctl` and `journalctl` (`tests/stubs`), which answer from the host in `tests/host`. It checks the output, the keys of the contract's fixtures (`tests/fixtures`) and how often lpod asks the host. It needs bash and jq.
+
 ## Links
 
 - [foxws/pods](https://github.com/foxws/pods) — the web UI `lpod` pairs with
