@@ -17,6 +17,7 @@ trap 'rm -rf "$WORK"' EXIT
 
 export PATH="${ROOT}/tests/stubs:${PATH}"
 export LPOD_PODMAN_BINARY="${ROOT}/tests/stubs/podman"
+export LPOD_QUADLET_BINARY="${ROOT}/tests/stubs/quadlet"
 export HOME="${WORK}/home"
 export XDG_CACHE_HOME="${WORK}/cache"
 export XDG_CONFIG_HOME="${WORK}/config"
@@ -519,6 +520,148 @@ test_case "APP redeploy --no-block hands the work to a transient unit"
 lpod stry redeploy --no-block --json && check '.ok'
 calls_like "^systemd-run --quiet --collect --no-block --user --unit lpod-redeploy-stry /.+ stry redeploy --json$" 1
 calls_like "^(podman pull|systemctl .*restart)" 0
+
+HELLO='{"files": [
+    {"name": "hello.container", "content": "[Container]\nImage=docker.io/library/hello-world\nVolume=hello-data.volume:/data\n"},
+    {"name": "hello-data.volume", "content": "[Volume]\n"}
+]}'
+INSTALLED="${XDG_CONFIG_HOME}/containers/systemd"
+
+test_case "quadlet check lists the units the files generate, next to the installed Quadlets"
+mkdir -p "$INSTALLED"
+printf '[Container]\nImagee=docker.io/library/broken\n' > "${INSTALLED}/broken.container"
+printf '[Container]\nImage=docker.io/library/valkey:9\n' > "${INSTALLED}/stry-valkey.container"
+lpod quadlet check --stdin --json <<< "$HELLO"
+check '. == {"contract": 1, "valid": true, "errors": [], "units": ["hello.service", "hello-data-volume.service"]}'
+keeps_contract quadlet-check '.'
+calls "quadlet -dryrun -user" 1
+holds "quadlet check left its files with the installed Quadlets" test ! -e "${INSTALLED}/hello.container"
+
+test_case "quadlet check finds the installed Quadlets the files refer to"
+mkdir -p "$INSTALLED"
+printf '[Network]\n' > "${INSTALLED}/stry.network"
+lpod quadlet check --stdin --json <<< '{"files": [{"name": "hello.container", "content": "[Container]\nImage=docker.io/library/hello-world\nNetwork=stry.network\n"}]}'
+check '.valid and .units == ["hello.service"]'
+lpod quadlet check --stdin --json <<< '{"files": [{"name": "hello.container", "content": "[Container]\nImage=docker.io/library/hello-world\nNetwork=gone.network\n"}]}'
+check '.valid == false and .errors == ["hello.container: requested Quadlet gone.network was not found"]'
+
+test_case "quadlet check reports the generator's errors about the files, without the lines that load them"
+lpod quadlet check --stdin --json <<< '{"files": [{"name": "hello.container", "content": "[Container]\nImagee=docker.io/library/hello-world\n"}]}'
+check '. == {"contract": 1, "valid": false, "errors": ["hello.container: unsupported key '"'"'Imagee'"'"' in group '"'"'Container'"'"'"], "units": []}'
+keeps_contract quadlet-check-invalid '.'
+
+test_case "quadlet check and install refuse a file name that isn't a plain Quadlet's, before writing anything"
+
+for NAME in ../hello.container hello.container.d/lpod-ondemand.conf .hidden.container hello.conf hello; do
+    for COMMAND in "check" "install hello"; do
+        # shellcheck disable=SC2086
+        lpod_status quadlet $COMMAND --stdin --json < <(jq -n --arg name "$NAME" '{files: [{name: $name, content: "[Container]\n"}]}')
+        exited_with 1
+        said "Invalid Quadlet file name: ${NAME}."
+    done
+done
+
+lpod_status quadlet check --stdin --json <<< '{"files": []}'
+exited_with 1
+said 'Pass {"files": [{"name": ..., "content": ...}]} on stdin.'
+calls_like "^(quadlet|podman quadlet install)" 0
+
+test_case "quadlet install installs the files as an application, byte for byte"
+lpod quadlet install hello --stdin --json < <(jq -n '{files: [
+    {name: "hello.container", content: "[Container]\nImage=docker.io/library/hello-world\nExec=sh -c '"'"'echo \"$HOME\" $(id)'"'"'"},
+    {name: "hello.env", content: "GREETING=hi\n"}
+]}') && check '.ok'
+calls_like "^podman quadlet install --application=hello --replace=false /.+/hello$" 1
+holds "hello.container changed on its way" cmp -s <(printf '%s' "[Container]
+Image=docker.io/library/hello-world
+Exec=sh -c 'echo \"\$HOME\" \$(id)'") "${LPOD_TEST_HOST}/quadlets/hello.container"
+holds "hello.env wasn't installed" test -f "${LPOD_TEST_HOST}/quadlets/hello.env"
+calls_like "^systemctl .*start" 0
+
+test_case "quadlet install --start starts the application's units, without waiting"
+lpod quadlet install hello --start --stdin --json < <(jq '.files += [
+    {name: "hello.network", content: "[Network]\n"},
+    {name: "hello.image", content: "[Image]\nImage=docker.io/library/hello-world\n"}
+]' <<< "$HELLO") && check '.ok'
+STARTED="$(sed -n 's/^systemctl --user --no-block start //p' "$LPOD_TEST_LOG" | tr ' ' '\n' | LC_ALL=C sort | tr '\n' ' ')"
+holds "started ${STARTED:-nothing}" test "$STARTED" == "hello-data-volume.service hello-network.service hello.service "
+
+test_case "quadlet install only replaces an application's files with --replace"
+lpod quadlet install hello --stdin --json <<< "$HELLO"
+lpod_status quadlet install hello --stdin --json <<< "$HELLO"
+exited_with 1
+said "a Quadlet with name hello"
+lpod quadlet install hello --replace --stdin --json <<< "$HELLO" && check '.ok'
+calls_like "^podman quadlet install --application=hello --replace=true " 1
+
+test_case "quadlet install refuses an application name that's an option, a path or a Quadlet's, and files not on stdin"
+
+for APPLICATION in -rf ../hello hello/world hello.container ""; do
+    lpod_status quadlet install "$APPLICATION" --stdin --json <<< "$HELLO"
+    exited_with 1
+    said "Invalid application name: ${APPLICATION}."
+done
+
+lpod_status quadlet install hello --json <<< "$HELLO"
+exited_with 1
+said "--stdin"
+lpod_status quadlet install hello --stdin --force --json <<< "$HELLO"
+exited_with 1
+said "Unknown option: --force"
+calls_like "^podman quadlet install" 0
+
+test_case "quadlet fetch returns a directory's files and the nearest pods.yml"
+REPOSITORY="${LPOD_TEST_HOST}/repositories/catalog"
+mkdir -p "${REPOSITORY}/nextcloud/config" "${REPOSITORY}/testing/nextcloud/next" "${REPOSITORY}/many" "${REPOSITORY}/big"
+printf 'name: catalog\n' > "${REPOSITORY}/pods.yml"
+printf 'name: nextcloud\n' > "${REPOSITORY}/nextcloud/pods.yml"
+printf '[Pod]\n' > "${REPOSITORY}/nextcloud/nextcloud.pod"
+printf '[Container]\nPod=nextcloud.pod\n' > "${REPOSITORY}/nextcloud/nextcloud-db.container"
+printf '[Container]\nPod=nextcloud.pod\n' > "${REPOSITORY}/nextcloud/nextcloud-app.container"
+printf 'SECRET=x\n' > "${REPOSITORY}/nextcloud/.env"
+printf 'not a file of this directory\n' > "${REPOSITORY}/nextcloud/config/app.yml"
+printf 'name: testing\n' > "${REPOSITORY}/testing/pods.yml"
+printf '[Container]\n' > "${REPOSITORY}/testing/nextcloud/next/nextcloud.container"
+head -c 70000 /dev/zero | tr '\0' '#' > "${REPOSITORY}/big/pods.yml"
+head -c 300000 /dev/zero | tr '\0' '#' > "${REPOSITORY}/big/big.container"
+printf '[Container]\n' > "${REPOSITORY}/big/small.container"
+
+for I in $(seq -w 1 60); do
+    printf '[Container]\n' > "${REPOSITORY}/many/app-${I}.container"
+done
+
+lpod quadlet fetch https://example.test/catalog.git --ref v2 --path nextcloud/ --json
+check '.manifest == "name: nextcloud\n" and .manifest_path == "nextcloud"'
+check '[.files[].name] == ["nextcloud-app.container", "nextcloud-db.container", "nextcloud.pod", "pods.yml"]'
+check '.files[0].content == "[Container]\nPod=nextcloud.pod\n"'
+keeps_contract quadlet-fetch '.'
+keeps_contract quadlet-fetch '.files[0]'
+calls_like "^git .*clone --quiet --depth 1 --branch v2 -- https://example.test/catalog.git " 1
+lpod quadlet fetch https://example.test/catalog.git --ref v2 --path testing/nextcloud/next --json
+check '.manifest == "name: testing\n" and .manifest_path == "testing" and [.files[].name] == ["nextcloud.container"]'
+lpod quadlet fetch https://example.test/catalog.git --ref v2 --path many --json
+check '.manifest == "name: catalog\n" and .manifest_path == "" and (.files | length) == 50 and .files[-1].name == "app-50.container"'
+keeps_contract quadlet-fetch-manifest '.'
+lpod quadlet fetch https://example.test/catalog.git --ref v2 --path big --json
+# A pods.yml over 64 KiB isn't the manifest, but it's still one of the files...
+check '.manifest == "name: catalog\n" and [.files[].name] == ["pods.yml", "small.container"]'
+
+test_case "quadlet fetch without a pods.yml, and of a repository, branch or directory that isn't there"
+mkdir -p "${LPOD_TEST_HOST}/repositories/bare/hello"
+printf '[Container]\n' > "${LPOD_TEST_HOST}/repositories/bare/hello/hello.container"
+lpod quadlet fetch https://example.test/bare.git --ref main --path hello --json
+check '.manifest == null and .manifest_path == null and [.files[].name] == ["hello.container"]'
+lpod quadlet fetch https://example.test/bare.git --ref main --json
+check '.manifest == null and .files == []'
+lpod_status quadlet fetch https://example.test/missing.git --ref main --json
+exited_with 1
+said "not found"
+lpod_status quadlet fetch https://example.test/bare.git --ref main --path goodbye --json
+exited_with 1
+said "goodbye is not a directory in the repository."
+lpod_status quadlet fetch https://example.test/bare.git --ref main --depth 1 --json
+exited_with 1
+said "Unknown option: --depth"
 
 # Untrusted input (#53, #55): names, Quadlet values, repositories and .env
 # files come from users and Git repositories...

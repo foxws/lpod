@@ -72,6 +72,38 @@ function run_exec {
     "$@" < /dev/null
 }
 
+# Installs the files in DIR for "quadlet install --application=APP
+# --replace=BOOL DIR": copies them to LPOD_TEST_HOST/quadlets and lists the
+# Quadlets among them, and refuses to overwrite one without --replace=true...
+function install_quadlets {
+    local APP="${1#--application=}" REPLACE="${2#--replace=}" DIR="$3" FILE NAME UNIT
+
+    for FILE in "$DIR"/*; do
+        NAME="$(basename "$FILE")"
+
+        if [ -e "$HOST/quadlets/$NAME" ] && [ "$REPLACE" != true ]; then
+            echo "Error: a Quadlet with name ${NAME} already exists, refusing to overwrite it" >&2
+
+            return 125
+        fi
+    done
+
+    for FILE in "$DIR"/*; do
+        NAME="$(basename "$FILE")"
+        cp "$FILE" "$HOST/quadlets/$NAME"
+
+        case "$NAME" in
+            *.container|*.kube) UNIT="${NAME%.*}.service" ;;
+            *.pod|*.volume|*.network|*.image|*.build) UNIT="${NAME%.*}-${NAME##*.}.service" ;;
+            *) continue ;;
+        esac
+
+        jq --arg name "$NAME" --arg unit "$UNIT" --arg app "$APP" \
+            'map(select(.Name != $name)) + [{Name: $name, UnitName: $unit, Path: "@QUADLETS@/\($name)", Status: "inactive/dead", App: $app}]' \
+            "$HOST/quadlet-list.json" > "$HOST/quadlet-list.json.new" && mv "$HOST/quadlet-list.json.new" "$HOST/quadlet-list.json"
+    done
+}
+
 case "$*" in
     "quadlet list --format json") sed "s|@QUADLETS@|${HOST}/quadlets|g" "$HOST/quadlet-list.json" ;;
     "ps --all --format json") cat "$HOST/ps.json" ;;
@@ -113,6 +145,7 @@ case "$*" in
             exit 2
         fi
         ;;
+    "quadlet install "*) install_quadlets "${@:3}" ;;
     "quadlet print "*)
         if [ ! -f "$HOST/quadlets/$3" ]; then
             echo "Error: no such quadlet $3" >&2
