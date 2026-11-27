@@ -18,6 +18,7 @@ trap 'rm -rf "$WORK"' EXIT
 export PATH="${ROOT}/tests/stubs:${PATH}"
 export LPOD_PODMAN_BINARY="${ROOT}/tests/stubs/podman"
 export LPOD_QUADLET_BINARY="${ROOT}/tests/stubs/quadlet"
+export LPOD_SOCKET_PROXYD_BINARY="${ROOT}/tests/stubs/systemd-socket-proxyd"
 export HOME="${WORK}/home"
 export XDG_CACHE_HOME="${WORK}/cache"
 export XDG_CONFIG_HOME="${WORK}/config"
@@ -146,6 +147,18 @@ function add_quadlet {
         '. + [{Name: $name, UnitName: $unit, Path: "@QUADLETS@/\($name)", Status: "inactive/dead", App: $app}]' \
         "${LPOD_TEST_HOST}/quadlet-list.json" > "${WORK}/quadlet-list.json"
     mv "${WORK}/quadlet-list.json" "${LPOD_TEST_HOST}/quadlet-list.json"
+}
+
+# Checks that the file ACTUAL is the same as tests/golden/GOLDEN, where
+# @STUBS@ stands for the stand-ins' directory...
+function matches_golden {
+    local GOLDEN="${ROOT}/tests/golden/$1" ACTUAL="$2"
+
+    if diff -u <(sed "s|@STUBS@|${ROOT}/tests/stubs|g" "$GOLDEN") "$ACTUAL" > "${WORK}/golden.diff" 2>&1; then
+        pass
+    else
+        fail "${ACTUAL} isn't tests/golden/${1}: $(cat "${WORK}/golden.diff")"
+    fi
 }
 
 # Forgets the calls so far, to count those of the next command only...
@@ -869,6 +882,156 @@ forget_calls
 lpod stry remove --volumes --images --json && check '.ok'
 calls_like "^podman (volume|image) rm" 1
 calls "podman image rm -- ghcr.io/francoism90/stry:4" 1
+
+# Installs "shop" for the on-demand tests: its main container, the database
+# it needs, a worker (as the container shop-worker) and a scheduler...
+function add_shop {
+    add_quadlet shop.container shop $'[Unit]\nRequires=shop-db.service\n\n[Container]\nImage=ghcr.io/example/shop:1\nPublishPort=8080:8000'
+    add_quadlet shop-db.container shop $'[Container]\nImage=docker.io/library/postgres:17'
+    add_quadlet shop-queue.container shop $'[Container]\nImage=ghcr.io/example/shop:1\nContainerName=shop-worker'
+    add_quadlet shop-cron.container shop $'[Container]\nImage=ghcr.io/example/shop:1'
+}
+
+UNIT_DIR="${XDG_CONFIG_HOME}/systemd/user"
+# The idle command is taken as it is, so its $HOME isn't expanded here...
+# shellcheck disable=SC2016
+SHOP_ONDEMAND=(--port 8080 --app-port 8000 --listen 127.0.0.1 --idle-timeout 15min
+    --worker shop-queue --idle-container shop-queue --idle-user www-data
+    --idle-command 'php artisan app:idle --max=50% $HOME "quoted" back\slash'
+    --schedule shop-cron --schedule-at '*:00' --schedule-at 00:00
+    --schedule-env 'APP_COMMAND=php artisan schedule:run --pct=50%' --schedule-env 'NOTE=say "hi" \o/')
+
+test_case "APP ondemand enable writes the socket, proxy, idle check, scheduler and drop-ins, escaped for systemd"
+add_shop
+lpod shop ondemand enable "${SHOP_ONDEMAND[@]}" --json && check '.ok'
+
+for UNIT in shop-ondemand.socket shop-ondemand.service shop-idle.service shop-idle.timer shop-cron.timer; do
+    matches_golden "ondemand/full/${UNIT}" "${UNIT_DIR}/${UNIT}"
+done
+
+for DROPIN in shop.container.d shop-cron.container.d; do
+    matches_golden "ondemand/full/${DROPIN}/lpod-ondemand.conf" "${LPOD_TEST_HOST}/quadlets/${DROPIN}/lpod-ondemand.conf"
+done
+
+holds "the units weren't stopped, enabled and started in that order" test "$(grep -E '^systemctl --user (daemon-reload|stop|enable|start)' "$LPOD_TEST_LOG")" == "systemctl --user daemon-reload
+systemctl --user stop shop.service shop-db.service shop-queue.service shop-cron.service
+systemctl --user enable shop-ondemand.socket
+systemctl --user start shop-ondemand.socket
+systemctl --user start shop-idle.timer shop-cron.timer"
+
+test_case "APP ondemand status shows the settings it was enabled with, and whether the socket listens and the app is awake"
+add_shop
+lpod shop ondemand status --json
+check '.ondemand | .enabled == false and .listening == false and .workers == [] and .schedule == null'
+lpod shop ondemand enable "${SHOP_ONDEMAND[@]}" --json
+lpod shop ondemand status --json
+check '.ondemand | .enabled and .listening and (.awake | not) and .port == 8080 and .local_port == 18080 and .app_port == 8000 and .listen == "127.0.0.1" and .idle_timeout == "15min"'
+# shellcheck disable=SC2016
+check '.ondemand | .workers == ["shop-queue"] and .idle_check == {"container": "shop-queue", "user": "www-data", "command": "php artisan app:idle --max=50% $HOME \"quoted\" back\\slash"}'
+check '.ondemand.schedule == {"container": "shop-cron", "at": ["*:00", "00:00"], "environment": {"APP_COMMAND": "php artisan schedule:run --pct=50%", "NOTE": "say \"hi\" \\o/"}}'
+keeps_contract ondemand-status '.ondemand'
+"${ROOT}/tests/stubs/systemctl" --user stop shop-ondemand.socket
+lpod shop ondemand status --json
+check '.ondemand | .enabled and (.listening | not)'
+# The proxy's Requires= starts the app, which the stand-in doesn't follow...
+"${ROOT}/tests/stubs/systemctl" --user start shop.service
+lpod shop ondemand status --json
+check '.ondemand.awake'
+
+test_case "APP ondemand enable without workers or a schedule, for a pod, on every address or one IPv6 address"
+add_quadlet media.pod media $'[Pod]\nPublishPort=9000:80' media-pod.service
+add_quadlet media-app.container media $'[Container]\nImage=docker.io/library/nginx:1\nPod=media.pod'
+lpod media ondemand enable --port 9000 --app-port 80 --json && check '.ok'
+matches_golden ondemand/minimal/media-ondemand.socket "${UNIT_DIR}/media-ondemand.socket"
+matches_golden ondemand/minimal/media-ondemand.service "${UNIT_DIR}/media-ondemand.service"
+matches_golden ondemand/minimal/media.pod.d/lpod-ondemand.conf "${LPOD_TEST_HOST}/quadlets/media.pod.d/lpod-ondemand.conf"
+holds "an idle check was written without workers" test ! -e "${UNIT_DIR}/media-idle.service"
+calls_like "^systemctl --user start .*timer" 0
+lpod media ondemand enable --port 9000 --app-port 80 --listen ::1 --json
+holds "the socket doesn't listen on [::1]:9000" grep -qx 'ListenStream=\[::1\]:9000' "${UNIT_DIR}/media-ondemand.socket"
+
+test_case "APP ondemand enable again replaces what the last enable wrote"
+add_shop
+lpod shop ondemand enable "${SHOP_ONDEMAND[@]}" --json
+forget_calls
+lpod shop ondemand enable --port 8081 --app-port 8000 --json && check '.ok'
+calls "systemctl --user disable --now shop-ondemand.socket" 1
+
+for FILE in "${UNIT_DIR}/shop-idle.service" "${UNIT_DIR}/shop-idle.timer" "${UNIT_DIR}/shop-cron.timer" "${LPOD_TEST_HOST}/quadlets/shop-cron.container.d"; do
+    holds "${FILE} is still there" test ! -e "$FILE"
+done
+
+holds "the socket doesn't listen on 8081" grep -qx 'ListenStream=8081' "${UNIT_DIR}/shop-ondemand.socket"
+holds "the main drop-in doesn't publish 18081" grep -qx 'PublishPort=127.0.0.1:18081:8000' "${LPOD_TEST_HOST}/quadlets/shop.container.d/lpod-ondemand.conf"
+
+test_case "APP ondemand disable removes what enable wrote, and starts the app again"
+add_shop
+lpod shop ondemand enable "${SHOP_ONDEMAND[@]}" --json
+forget_calls
+lpod shop ondemand disable --json && check '.ok'
+
+for FILE in shop-ondemand.socket shop-ondemand.service shop-idle.service shop-idle.timer shop-cron.timer; do
+    holds "${FILE} is still there" test ! -e "${UNIT_DIR}/${FILE}"
+done
+
+holds "a drop-in directory is still there" test ! -e "${LPOD_TEST_HOST}/quadlets/shop.container.d" -a ! -e "${LPOD_TEST_HOST}/quadlets/shop-cron.container.d"
+holds "the app wasn't reloaded, reset and started in that order" test "$(grep -E '^systemctl --user (daemon-reload|reset-failed|--no-block start)' "$LPOD_TEST_LOG")" == "systemctl --user daemon-reload
+systemctl --user reset-failed shop.service
+systemctl --user --no-block start shop.service"
+lpod_status shop ondemand disable --json
+exited_with 1
+said "shop isn't on-demand."
+
+test_case "APP ondemand disable leaves drop-ins it didn't write"
+add_shop
+lpod shop ondemand enable "${SHOP_ONDEMAND[@]}" --json
+printf '[Container]\nMemory=1g\n' > "${LPOD_TEST_HOST}/quadlets/shop.container.d/memory.conf"
+lpod shop ondemand disable --json
+holds "memory.conf was removed" test -f "${LPOD_TEST_HOST}/quadlets/shop.container.d/memory.conf"
+holds "lpod-ondemand.conf is still there" test ! -e "${LPOD_TEST_HOST}/quadlets/shop.container.d/lpod-ondemand.conf"
+
+test_case "APP ondemand enable refuses settings it can't write, and writes nothing"
+add_shop
+add_quadlet kubed.kube kubed $'[Kube]\nYaml=kubed.yaml'
+
+while IFS= read -r ARGS; do
+    eval "ENABLE=(${ARGS})"
+    lpod_status "${ENABLE[@]}" --json
+    exited_with 1
+done <<'EOF'
+shop ondemand enable --app-port 8000
+shop ondemand enable --port 8080
+shop ondemand enable --port 0 --app-port 8000
+shop ondemand enable --port 65536 --app-port 8000
+shop ondemand enable --port 8080x --app-port 8000
+shop ondemand enable --port 60000 --app-port 8000
+shop ondemand enable --port 8080 --app-port 8000 --listen localhost
+shop ondemand enable --port 8080 --app-port 8000 --idle-timeout "5 min"
+shop ondemand enable --port 8080 --app-port 8000 --idle-timeout never
+shop ondemand enable --port 8080 --app-port 8000 --idle-container shop-queue --idle-command true
+shop ondemand enable --port 8080 --app-port 8000 --worker shop-queue --idle-container shop-queue
+shop ondemand enable --port 8080 --app-port 8000 --worker shop-queue --idle-user www-data
+shop ondemand enable --port 8080 --app-port 8000 --worker shop-queue --idle-container shop-queue --idle-command true --idle-user "root;id"
+shop ondemand enable --port 8080 --app-port 8000 --worker shop-queue --idle-container shop-queue --idle-command $'true\nid'
+shop ondemand enable --port 8080 --app-port 8000 --schedule-at 00:00
+shop ondemand enable --port 8080 --app-port 8000 --schedule shop-cron
+shop ondemand enable --port 8080 --app-port 8000 --schedule shop-cron --schedule-at 24:00
+shop ondemand enable --port 8080 --app-port 8000 --schedule shop-cron --schedule-at 1:00
+shop ondemand enable --port 8080 --app-port 8000 --schedule shop-cron --schedule-at 00:00 --schedule-env 1X=a
+shop ondemand enable --port 8080 --app-port 8000 --schedule shop-cron --schedule-at 00:00 --schedule-env 'X=$HOME'
+shop ondemand enable --port 8080 --app-port 8000 --schedule shop-cron --schedule-at 00:00 --schedule-env $'X=a\nExecStart=id'
+shop ondemand enable --port 8080 --app-port 8000 --worker ghost
+shop ondemand enable --port 8080 --app-port 8000 --worker shop
+shop ondemand enable --port 8080 --app-port 8000 --worker shop-cron --schedule shop-cron --schedule-at 00:00
+shop ondemand enable --port 8080 --app-port 8000 --schedule shop --schedule-at 00:00
+shop ondemand enable --port 8080 --app-port 8000 --force
+kubed ondemand enable --port 8080 --app-port 8000
+EOF
+
+said "On-demand needs a container or pod as the main unit, and kubed's is a kube."
+holds "a refused enable wrote units" test -z "$(find "$UNIT_DIR" -name 'shop-*' -o -name 'kubed-*')"
+holds "a refused enable wrote drop-ins" test -z "$(find "${LPOD_TEST_HOST}/quadlets" -name '*.d')"
+calls_like "^systemctl --user (daemon-reload|enable|start)" 0
 
 # Untrusted input (#53, #55): names, Quadlet values, repositories and .env
 # files come from users and Git repositories...

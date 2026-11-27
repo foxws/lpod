@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# A stand-in for systemd-socket-proxyd, which lpod finds through
+# LPOD_SOCKET_PROXYD_BINARY and only writes into the on-demand units, so it
+# never runs in the tests...
+
+echo "systemd-socket-proxyd stub: unexpected call: $*" >&2
+exit 1

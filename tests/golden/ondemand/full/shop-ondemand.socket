@@ -1,0 +1,11 @@
+# Written by "lpod shop ondemand enable". See "On-demand" in lpod's docs/commands.md.
+# lpod-ondemand: {"port":8080,"local_port":18080,"app_port":8000,"listen":"127.0.0.1","idle_timeout":"15min","workers":["shop-queue"],"idle_check":{"container":"shop-queue","user":"www-data","command":"php artisan app:idle --max=50% $HOME \"quoted\" back\\slash"},"schedule":{"container":"shop-cron","at":["*:00","00:00"],"environment":{"APP_COMMAND":"php artisan schedule:run --pct=50%","NOTE":"say \"hi\" \\o/"}}}
+[Unit]
+Description=shop on-demand socket
+Wants=shop-idle.timer shop-cron.timer
+
+[Socket]
+ListenStream=127.0.0.1:8080
+
+[Install]
+WantedBy=sockets.target

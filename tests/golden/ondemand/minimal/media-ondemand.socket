@@ -1,0 +1,10 @@
+# Written by "lpod media ondemand enable". See "On-demand" in lpod's docs/commands.md.
+# lpod-ondemand: {"port":9000,"local_port":19000,"app_port":80,"listen":null,"idle_timeout":"10min","workers":[],"idle_check":null,"schedule":null}
+[Unit]
+Description=media on-demand socket
+
+[Socket]
+ListenStream=9000
+
+[Install]
+WantedBy=sockets.target

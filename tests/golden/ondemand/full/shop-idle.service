@@ -1,0 +1,13 @@
+# Written by "lpod shop ondemand enable". See "On-demand" in lpod's docs/commands.md.
+[Unit]
+Description=shop idle check
+
+[Service]
+Type=oneshot
+TimeoutStartSec=50
+ExecCondition=systemctl --user --quiet is-active shop-ondemand.socket
+ExecCondition=/bin/sh -c 'case "$$(systemctl --user is-active "$$1")" in inactive|failed) exit 0;; *) exit 1;; esac' sh shop.service
+ExecCondition=/bin/sh -c '! systemctl --user --quiet is-active "$$1" || { echo "The scheduler is still running."; exit 1; }' sh shop-cron.service
+ExecCondition=/bin/sh -c 'unit=$$1; shift; ! systemctl --user --quiet is-active "$$unit" || "$$@" || { echo "shop has work in progress, keeping its workers running."; exit 1; }' sh shop-queue.service "@STUBS@/podman" exec --user "www-data" "shop-worker" "php" "artisan" "app:idle" "--max=50%%" "$$HOME" "\"quoted\"" "back\\slash"
+ExecCondition=/bin/sh -c 'case "$$(systemctl --user is-active "$$1")" in inactive|failed) exit 0;; *) exit 1;; esac' sh shop.service
+ExecStart=systemctl --user stop --no-block shop-queue.service
