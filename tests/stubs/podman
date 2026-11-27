@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+# A stand-in for podman that answers from the files in LPOD_TEST_HOST and
+# logs every call to LPOD_TEST_LOG, so tests can count what lpod asks...
+
+HOST="${LPOD_TEST_HOST:?}"
+echo "podman $*" >> "${LPOD_TEST_LOG:?}"
+
+# Prints the containers of inspect.json whose ID or name is one of the
+# arguments, and fails like podman when one of them isn't there...
+function inspect_containers {
+    local FORMAT="$1"
+    shift
+
+    # A container is asked for by its name, or its ID or the start of it...
+    # shellcheck disable=SC2016
+    local MATCHES='. as $container | $wanted | (. == $container.Name) or ($container.Id | startswith($wanted))'
+
+    jq -r --arg format "$FORMAT" "
+        \$ARGS.positional as \$all
+        | map(select([\$all[] as \$wanted | ${MATCHES}] | any))
+        | if \$format == \"\" then . else .[] | \"\\(.Id)\\t\\(.Image)\" end" --args "$@" < "$HOST/inspect.json"
+
+    local NAME
+    for NAME in "$@"; do
+        if ! jq -e --arg wanted "$NAME" "any(.[]; ${MATCHES})" "$HOST/inspect.json" > /dev/null; then
+            echo "Error: no such container ${NAME}" >&2
+
+            return 125
+        fi
+    done
+}
+
+case "$*" in
+    "quadlet list --format json") sed "s|@QUADLETS@|${HOST}/quadlets|g" "$HOST/quadlet-list.json" ;;
+    "ps --all --format json") cat "$HOST/ps.json" ;;
+    "ps --all --quiet") jq -r '.[].Id[0:12]' "$HOST/ps.json" ;;
+    "ps --all --format {{.State}}") jq -r '.[].State' "$HOST/ps.json" ;;
+    "pod ps --format json") cat "$HOST/pods.json" ;;
+    "images --all --format json"|"images --format json") cat "$HOST/images.json" ;;
+    "stats --no-stream --format {{json .}}") cat "$HOST/stats.jsonl" ;;
+    "auto-update --dry-run --format json") cat "$HOST/auto-update.json" ;;
+    "volume inspect --all") cat "$HOST/volumes.json" ;;
+    "network ls --format json") cat "$HOST/networks.json" ;;
+    "pull --quiet "*) cp "$HOST/images-pulled.json" "$HOST/images.json" ;;
+    "container inspect --format "*) shift 3; inspect_containers table "$@" ;;
+    "container inspect "*) shift 2; inspect_containers "" "$@" ;;
+    *) echo "podman stub: unexpected call: $*" >&2; exit 1 ;;
+esac

@@ -1,0 +1,8 @@
+[Container]
+Image=ghcr.io/francoism90/stry:4
+ContainerName=stry-app
+PublishPort=8000:8080
+Volume=stry-data.volume:/data
+Network=stry.network
+AutoUpdate=registry
+Label=io.foxws.pods.url=https://stry.test

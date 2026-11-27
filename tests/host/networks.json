@@ -1,0 +1,4 @@
+[
+    {"name": "podman", "driver": "bridge", "subnets": [{"subnet": "10.88.0.0/16", "gateway": "10.88.0.1"}], "dns_enabled": false, "internal": false, "ipv6_enabled": false},
+    {"name": "stry", "driver": "bridge", "subnets": [{"subnet": "10.89.0.0/24", "gateway": "10.89.0.1"}], "dns_enabled": true, "internal": false, "ipv6_enabled": false}
+]

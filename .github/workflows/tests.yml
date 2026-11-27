@@ -1,0 +1,22 @@
+name: Tests
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: shellcheck
+        run: shellcheck bin/lpod install.sh tests/run.sh tests/stubs/*
+
+      - name: Run the tests against stubbed podman, systemctl and journalctl
+        run: tests/run.sh
