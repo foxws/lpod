@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+# A stand-in for Podman's Quadlet generator, as "quadlet -dryrun [-user]". For
+# every Quadlet in the QUADLET_UNIT_DIRS, it logs that it loads the file, as
+# Podman 6.1 does, and prints the unit it generates as "---UNIT---" and the
+# file. A file with the key "Imagee", or that refers to a Quadlet in none of
+# the directories (Network=, Pod=, Volume=), generates nothing and logs an
+# error like Podman's. Every call is logged to LPOD_TEST_LOG...
+
+echo "quadlet $*" >> "${LPOD_TEST_LOG:?}"
+
+IFS=: read -ra DIRS <<< "${QUADLET_UNIT_DIRS:-}"
+
+for DIR in "${DIRS[@]}"; do
+    for FILE in "$DIR"/*.container "$DIR"/*.pod "$DIR"/*.volume "$DIR"/*.network "$DIR"/*.kube "$DIR"/*.image "$DIR"/*.build; do
+        [ -f "$FILE" ] || continue
+
+        NAME="$(basename "$FILE")"
+        BASE="${NAME%.*}"
+        echo "quadlet-generator[4242]: Loading source unit file ${FILE}" >&2
+
+        if grep -q '^Imagee=' "$FILE"; then
+            echo "quadlet-generator[4242]: ${NAME}: unsupported key 'Imagee' in group 'Container'" >&2
+
+            continue
+        fi
+
+        # A Quadlet another one refers to must be in one of the directories...
+        MISSING=""
+
+        while IFS= read -r REFERENCE; do
+            FOUND=false
+
+            for OTHER in "${DIRS[@]}"; do
+                [ -f "${OTHER}/${REFERENCE}" ] && FOUND=true
+            done
+
+            if [ "$FOUND" != true ]; then
+                MISSING="$REFERENCE"
+            fi
+        done < <(sed -nE 's/^(Network|Pod)=([^:]+\.(network|pod))$/\2/p; s/^Volume=([^:]+\.volume):.*/\1/p' "$FILE")
+
+        if [ -n "$MISSING" ]; then
+            echo "quadlet-generator[4242]: ${NAME}: requested Quadlet ${MISSING} was not found" >&2
+
+            continue
+        fi
+
+        case "${NAME##*.}" in
+            container|kube) UNIT="${BASE}.service" ;;
+            *) UNIT="${BASE}-${NAME##*.}.service" ;;
+        esac
+
+        printf -- '---%s---\n' "$UNIT"
+        cat "$FILE"
+        echo
+    done
+done
