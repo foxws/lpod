@@ -843,10 +843,15 @@ JQ
 
 # Prints every application as JSON, with the internal "detail" and "services"
 # keys that "lpod APP status|logs" use. Failed applications get the last
-# error their main unit logged...
+# error their main unit logged. UNITS (the JSON of quadlet_units_json) limits
+# it to the applications of those Quadlets...
 function applications_json {
-    local UNITS SOURCES STATES CONTAINERS STATS APPLICATIONS
-    UNITS="$(quadlet_units_json)" || return 1
+    local UNITS="${1:-}"
+    local SOURCES STATES CONTAINERS STATS APPLICATIONS
+
+    if [ -z "$UNITS" ]; then
+        UNITS="$(quadlet_units_json)" || return 1
+    fi
     SOURCES="$(quadlet_sources_json "$UNITS")"
     STATES="$(unit_states_json "$UNITS")"
     CONTAINERS="$(containers_json)"
@@ -887,7 +892,7 @@ function application_json {
         return 1
     fi
 
-    applications_json | jq -e --arg name "$APPLICATION" 'first(.[] | select(.name == $name))' || {
+    applications_json "$(jq --arg app "$APPLICATION" 'map(select(.app == $app))' <<< "$UNITS")" | jq -e --arg name "$APPLICATION" 'first(.[] | select(.name == $name))' || {
         echo "${APPLICATION} has no container, pod or kube Quadlet." >&2
 
         return 1
@@ -3396,12 +3401,16 @@ function container_inspect_all_json {
 }
 
 # Prints every container, managed by Quadlet or not, as the contract's
-# "containers" list...
+# "containers" list. Their "cpu" and "memory" are only sampled with "--stats",
+# since "podman stats" reads every running container's cgroup...
 function host_containers_json {
-    local UNITS PS STATS
+    local UNITS PS STATS="[]"
     UNITS="$(quadlet_units_json)" || return 1
     PS="$("${LPOD_PODMAN_BINARY:-podman}" ps --all --format json)" || return 1
-    STATS="$(container_stats_json)"
+
+    if [ "${1:-}" == "--stats" ]; then
+        STATS="$(container_stats_json)"
+    fi
 
     jq -n \
         --slurpfile units <(printf '%s' "$UNITS") \
@@ -3440,7 +3449,7 @@ function cmd_containers_json {
     require_jq
 
     local CONTAINERS
-    CONTAINERS="$(host_containers_json)" || return 1
+    CONTAINERS="$(host_containers_json --stats)" || return 1
 
     jq --argjson contract "$LPOD_CONTRACT" '{contract: $contract, containers: .}' <<< "$CONTAINERS"
 }
@@ -3455,8 +3464,14 @@ function cmd_container_json {
 
     valid_name "$NAME" || return 1
 
-    local CONTAINERS SUMMARY
-    CONTAINERS="$(host_containers_json)" || return 1
+    # Only "inspect" shows the summary's cpu and memory...
+    local CONTAINERS SUMMARY STATS_OPTION=()
+
+    if [ "$ACTION" == "inspect" ]; then
+        STATS_OPTION=(--stats)
+    fi
+
+    CONTAINERS="$(host_containers_json "${STATS_OPTION[@]}")" || return 1
     SUMMARY="$(jq -e --arg name "$NAME" 'first(.[] | select(.name == $name or .id == $name))' <<< "$CONTAINERS")" || {
         echo "No container named ${NAME}." >&2
 
@@ -3723,7 +3738,7 @@ function cmd_images_json {
                         containers: ($used | length),
                         dangling: ($reference == null),
                         auto_update: (first($used[].auto_update | select(. != null)) // null),
-                        update: (if $reference != null and any($updates[]; .Image == $reference and .Updated == "pending")
+                        update: (if $reference != null and any($updates[]; .Updated == "pending" and .ImageID == $image.Id)
                             then ($reference | capture(":(?<tag>[^:/]+)$").tag // "latest") else null end)
                     })
                 | sort_by(.dangling, .repository, .tag))
@@ -3793,7 +3808,10 @@ function cmd_images_prune_json {
 }
 
 # "lpod auto-update --dry-run --json": asks the registries which images have
-# an update, and keeps the answer for "lpod images"...
+# an update, and keeps the answer for "lpod images". Podman compares the image
+# a container runs with the registry, so each pending update keeps the ID of
+# that image ("ImageID"): once a pull, an update or a restart moves the name
+# or the container to another image, the update no longer applies to it...
 function cmd_auto_update_json {
     require_jq
 
@@ -3803,11 +3821,24 @@ function cmd_auto_update_json {
         return 1
     fi
 
+    local PODMAN="${LPOD_PODMAN_BINARY:-podman}"
     local RESULT
-    RESULT="$("${LPOD_PODMAN_BINARY:-podman}" auto-update --dry-run --format json)" || return 1
+    RESULT="$("$PODMAN" auto-update --dry-run --format json)" || return 1
+    RESULT="$(jq 'if type == "array" then . else [] end' <<< "${RESULT:-[]}")" || return 1
+
+    local IDS RUNNING=""
+    mapfile -t IDS < <(jq -r '.[] | select(.Updated == "pending") | .ContainerID // empty' <<< "$RESULT")
+
+    # A container removed since the dry run has no image to keep, so a failed
+    # inspect of one of them isn't a failure here...
+    if [ ${#IDS[@]} -gt 0 ]; then
+        RUNNING="$("$PODMAN" container inspect --format '{{.Id}}{{"\t"}}{{.Image}}' "${IDS[@]}" 2>/dev/null || true)"
+    fi
 
     mkdir -p "$(dirname "$(auto_update_cache)")" || return 1
-    jq 'if type == "array" then . else [] end' <<< "${RESULT:-[]}" > "$(auto_update_cache)" || return 1
+    jq --rawfile running <(printf '%s' "$RUNNING") '
+        ($running | split("\n") | map(select(contains("\t")) | split("\t") | {(.[0]): .[1]}) | add // {}) as $images
+        | map(. + {ImageID: $images[.ContainerID // ""]})' <<< "$RESULT" > "$(auto_update_cache)" || return 1
 
     json_ok
 }
