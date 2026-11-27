@@ -1,0 +1,8 @@
+{
+    // The extensions this repository uses, which VS Code offers to install,
+    // the same ones .devcontainer/devcontainer.json installs in the container.
+    "recommendations": [
+        "golang.go",
+        "timonwong.shellcheck"
+    ]
+}
