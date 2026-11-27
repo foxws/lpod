@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Runs lpod's "--json" commands against stand-ins for podman, systemctl and
-# journalctl (tests/stubs) that answer from the host in tests/host, and checks
-# what lpod prints, that it keeps the keys of the contract's fixtures, and how
-# often it asks the host. Needs bash and jq...
+# Runs lpod's commands against stand-ins for podman, systemctl, journalctl,
+# git and the others it runs (tests/stubs), which answer from the host in
+# tests/host, and checks what lpod prints, that it keeps the keys of the
+# contract's fixtures, and how often it asks the host. Needs bash and jq...
 
 set -uo pipefail
 
@@ -97,6 +97,54 @@ function calls {
     else
         fail "expected ${2} of \"${1}\", got ${COUNT}"
     fi
+}
+
+# Checks that COUNT calls since the test started match the extended regular
+# expression PATTERN, such as none that pass an option where a name goes...
+function calls_like {
+    local COUNT
+    COUNT="$(grep -cE -- "$1" "$LPOD_TEST_LOG")"
+
+    if [ "$COUNT" -eq "$2" ]; then
+        pass
+    else
+        fail "expected ${2} calls like \"${1}\", got ${COUNT}: $(grep -E -- "$1" "$LPOD_TEST_LOG" | head -n 3)"
+    fi
+}
+
+# Checks that the command after MESSAGE succeeds, and fails the test with
+# MESSAGE when it doesn't...
+function holds {
+    local MESSAGE="$1"
+    shift
+
+    if "$@"; then
+        pass
+    else
+        fail "$MESSAGE"
+    fi
+}
+
+# Checks that the last lpod_status printed TEXT to stderr...
+function said {
+    if grep -qF -- "$1" "${WORK}/stderr"; then
+        pass
+    else
+        fail "expected \"${1}\" on stderr, got: $(cat "${WORK}/stderr")"
+    fi
+}
+
+# Installs the Quadlet NAME with CONTENT on the test host, as part of the
+# application APP ("" for a lone Quadlet), and generating UNIT, which is
+# NAME's own unit unless it's given...
+function add_quadlet {
+    local NAME="$1" APP="$2" CONTENT="$3" UNIT="${4:-${1%.*}.service}"
+
+    printf '%s\n' "$CONTENT" > "${LPOD_TEST_HOST}/quadlets/${NAME}"
+    jq --arg name "$NAME" --arg app "$APP" --arg unit "$UNIT" \
+        '. + [{Name: $name, UnitName: $unit, Path: "@QUADLETS@/\($name)", Status: "inactive/dead", App: $app}]' \
+        "${LPOD_TEST_HOST}/quadlet-list.json" > "${WORK}/quadlet-list.json"
+    mv "${WORK}/quadlet-list.json" "${LPOD_TEST_HOST}/quadlet-list.json"
 }
 
 # Forgets the calls so far, to count those of the next command only...
@@ -284,6 +332,129 @@ if [ "$(id -u)" -ne 0 ]; then
     exited_with 1
     check 'first(.checks[] | select(.id == "runtime-dir")).status == "fail" and ([.checks[] | select(.id == "user-bus")] == []) and .failures >= 1'
 fi
+
+# Untrusted input (#53, #55): names, Quadlet values, repositories and .env
+# files come from users and Git repositories...
+
+test_case "names that could be options or paths are refused before podman runs"
+
+for ARGS in "container -rf restart" "container ../stry-app inspect" "volume rm --all" "volume rm ../stry-data" \
+    "volume export --all" "network rm -f" "secret rm --all" "secret create ../db --stdin" \
+    "image pull --all-tags" "image pull ../x" "image rm --force" "image rm stry"; do
+    forget_calls
+    # shellcheck disable=SC2086
+    lpod_status $ARGS --json < /dev/null
+    exited_with 1
+    calls_like "" 0
+done
+
+test_case "a secret's value only comes from stdin"
+lpod_status secret create db-password --json
+exited_with 1
+said "--stdin"
+calls_like "^podman secret" 0
+lpod secret create db-password --stdin --json < <(printf 's3cret') && check '.ok'
+calls "podman secret create --driver file db-password -" 1
+calls_like "s3cret" 0
+holds "podman didn't get the secret's value on stdin" grep -qxF s3cret "${LPOD_TEST_HOST}/secret-value"
+
+test_case "a Secret= name in a Quadlet is refused before it becomes an argument"
+add_quadlet evil.container "" $'[Container]\nImage=docker.io/library/alpine:3\nSecret=--all,type=env,target=TOKEN'
+lpod_status evil secrets < /dev/null
+exited_with 1
+said "Invalid name: --all."
+calls_like "^podman secret" 0
+
+test_case "a ServiceName= that starts with - never reaches systemctl as an option"
+add_quadlet evil.container "" $'[Container]\nImage=docker.io/library/alpine:3\n[Service]\nServiceName=--host=evil' "--host=evil.service"
+lpod apps --json
+check 'first(.applications[] | select(.name == "evil")).unit == "evil.service"'
+lpod evil restart --json && check '.ok'
+calls "systemctl --user restart evil.service" 1
+calls_like "--host" 0
+
+test_case "APP remove passes names after --, and only removes the plain ones no one else uses"
+add_quadlet evil-app.container evil "$(printf '%s\n' '[Container]' \
+    'Image=--all' 'Image=docker.io/library/valkey:9' 'Image=docker.io/library/alpine:3' \
+    'Volume=-rf:/srv' 'Volume=evil-data:/data' 'Volume=stry-data.volume:/shared' \
+    'Secret=--all,type=env' 'Secret=evil-key,type=env')"
+lpod evil remove --volumes --images --secrets --json && check '.ok'
+calls "podman quadlet rm --force --recursive -- evil" 1
+calls "podman volume rm -- evil-data" 1
+calls "podman image rm -- docker.io/library/alpine:3" 1
+calls "podman secret rm -- evil-key" 1
+calls_like "^podman (volume|image|secret) rm" 3
+calls_like "^podman (volume|image|secret) rm -- -" 0
+
+test_case "quadlet fetch refuses a URL, branch or directory that git would read as something else, before cloning"
+
+for ARGS in "file:///etc --ref main" "/etc --ref main" "ext::sh --ref main" "--upload-pack=touch --ref main" \
+    "https://example.test/apps.git --ref --upload-pack=touch" "https://example.test/apps.git --ref main..x" \
+    "https://example.test/apps.git --ref main --path ../etc" "https://example.test/apps.git --ref main --path stry/../.." \
+    "https://example.test/apps.git --ref main --path /etc"; do
+    forget_calls
+    # shellcheck disable=SC2086
+    lpod_status quadlet fetch $ARGS --json
+    exited_with 1
+    calls_like "^git" 0
+done
+
+test_case "quadlet fetch never reads a file outside the repository, through a symlink or a name with a newline"
+OUTSIDE="${WORK}/outside"
+REPOSITORY="${LPOD_TEST_HOST}/repositories/apps"
+rm -rf "$OUTSIDE"
+mkdir -p "${OUTSIDE}/apps" "${REPOSITORY}/stry" "${REPOSITORY}/nested"
+echo "the host's own file" > "${OUTSIDE}/secret"
+echo "the host's own file" > "${OUTSIDE}/apps/secret.container"
+printf 'name: root\n' > "${REPOSITORY}/pods.yml"
+printf '[Container]\nImage=ghcr.io/francoism90/stry:4\n' > "${REPOSITORY}/stry/stry.container"
+echo hidden > "${REPOSITORY}/stry/.env"
+# Read a line at a time, this name would also be name.container in the
+# working directory, the home directory over SSH...
+echo newline > "${REPOSITORY}/stry/"$'evil\nname.container'
+echo "the host's own file" > "${HOME}/name.container"
+ln -s "${OUTSIDE}/secret" "${REPOSITORY}/stry/pods.yml"
+ln -s "${OUTSIDE}/secret" "${REPOSITORY}/stry/linked.container"
+ln -s "$OUTSIDE" "${REPOSITORY}/linked"
+ln -s ../stry "${REPOSITORY}/nested/stry"
+
+lpod quadlet fetch https://example.test/apps.git --ref main --path stry --json
+check '.commit == "abc1234" and ([.files[].name] == ["stry.container"])'
+check '.manifest == "name: root\n" and .manifest_path == ""'
+calls_like "^git .*clone --quiet --depth 1 --branch main -- https://example.test/apps.git " 1
+
+for DIRECTORY in linked linked/apps nested/stry; do
+    lpod_status quadlet fetch https://example.test/apps.git --ref main --path "$DIRECTORY" --json
+    exited_with 1
+    said "${DIRECTORY} is not a directory in the repository."
+done
+
+test_case ".env is read as text, and only for the settings lpod uses"
+cat > "${HOME}/.env" <<'EOF'
+$(touch pwned)
+APP_USER=$(touch pwned)
+LPOD_PODMAN_BINARY=/bin/false
+export APP_URL="https://stry.test" # the site
+APP_PORT=8443 # the proxy's port
+EOF
+lpod stry open
+calls "xdg-open https://stry.test:8443" 1
+lpod stry export-cert "${HOME}/stry.crt"
+calls "podman cp systemd-stry:/data/caddy/pki/authorities/local/root.crt ${HOME}/stry.crt" 1
+holds ".env ran a command" test ! -e "${HOME}/pwned"
+printf 'APP_URL=file:///etc/passwd\n' > "${HOME}/.env"
+lpod_status stry open
+exited_with 1
+said "Set APP_URL to an http:// or https:// address."
+calls_like "^xdg-open" 1
+rm -f "${HOME}/.env"
+
+test_case "the proxy only trusts forwarded headers behind another proxy"
+CADDYFILE="${HOME}/.config/pods-proxy/Caddyfile"
+lpod proxy settings set --stdin --json < <(echo '{"mode": "letsencrypt", "email": "admin@example.test"}') && check '.ok'
+holds "the letsencrypt mode trusts X-Forwarded-* headers" test "$(grep -c trusted_proxies "$CADDYFILE")" -eq 0
+lpod proxy settings set --stdin --json < <(echo '{"mode": "http"}') && check '.ok'
+holds "the http mode doesn't trust the proxy in front of it" grep -q "trusted_proxies static private_ranges" "$CADDYFILE"
 
 echo "${PASSED} passed, ${FAILED} failed"
 

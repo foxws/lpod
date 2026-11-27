@@ -11,7 +11,7 @@ lpod runs Podman Quadlet applications on a host. [Pods](https://github.com/foxws
 - `docs/commands.md`: the reference for every command and its JSON output.
 - `tests/`:
   - `run.sh` is the test runner;
-  - `stubs/` has stand-ins for `podman`, `systemctl` and `journalctl`;
+  - `stubs/` has stand-ins for `podman`, `systemctl`, `journalctl`, `git` and the other commands lpod runs;
   - `host/` is the host they answer from;
   - `fixtures/contract-1/` holds the contract's sample payloads.
 - `.github/workflows/`: `tests.yml` runs shellcheck and the tests, and `release.yml` runs on `v*` tags.
