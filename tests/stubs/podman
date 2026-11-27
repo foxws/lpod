@@ -30,6 +30,48 @@ function inspect_containers {
     done
 }
 
+# Runs "exec [--interactive] [--user USER] [--workdir DIR] NAME COMMAND..."
+# on this machine instead of in the container. Like podman, it only passes
+# stdin on with --interactive, and fails with 125 for the user "ghost"...
+function run_exec {
+    local INTERACTIVE=false
+
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --interactive) INTERACTIVE=true ;;
+            --user)
+                if [ "$2" == "ghost" ]; then
+                    echo "Error: unable to find user ghost: no matching entries in passwd file" >&2
+
+                    return 125
+                fi
+
+                shift
+                ;;
+            --workdir) shift ;;
+            *) break ;;
+        esac
+
+        shift
+    done
+
+    shift
+
+    if [ "$INTERACTIVE" == true ]; then
+        "$@"
+
+        return
+    fi
+
+    # lpod closes podman's own stdin too, so it never waits on the SSH
+    # session's input...
+    if [ "$(readlink /proc/self/fd/0)" != /dev/null ]; then
+        echo "podman exec: stdin is open" >> "${LPOD_TEST_LOG:?}"
+    fi
+
+    "$@" < /dev/null
+}
+
 case "$*" in
     "quadlet list --format json") sed "s|@QUADLETS@|${HOST}/quadlets|g" "$HOST/quadlet-list.json" ;;
     "ps --all --format json") cat "$HOST/ps.json" ;;
@@ -46,7 +88,9 @@ case "$*" in
     "info --format "*) printf '%s\t%s\t%s\n' "${HOST}/storage" "$(cat "$HOST/storage-driver")" netavark ;;
     "quadlet --help") echo "Manage Quadlets" ;;
     "version --format "*) echo "6.2.0" ;;
-    "pull --quiet "*missing*) echo "Error: initializing source docker://${3}: manifest unknown" >&2; exit 125 ;;
+    "pull --quiet "*missing*) echo "Error: initializing source docker://${*: -1}: manifest unknown" >&2; exit 125 ;;
+    "start "*|"stop "*|"restart "*) echo "$2" ;;
+    "exec "*) run_exec "${@:2}" ;;
     "pull --quiet "*) cp "$HOST/images-pulled.json" "$HOST/images.json" ;;
     # A prune prints what it removed, kept in LPOD_TEST_HOST/pruned-KIND, and
     # fails like podman when LPOD_TEST_HOST/prune-fails exists...

@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# A stand-in for systemd-run that only logs the transient unit it was asked to
+# start to LPOD_TEST_LOG...
+
+echo "systemd-run $*" >> "${LPOD_TEST_LOG:?}"

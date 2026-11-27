@@ -394,6 +394,132 @@ for KIND in images containers volumes networks; do
     holds "a failed ${KIND} prune printed JSON" test -z "$OUTPUT"
 done
 
+test_case "container NAME start|stop|restart goes through the container's unit, without waiting"
+
+for ACTION in start stop restart; do
+    forget_calls
+    lpod container stry-app "$ACTION" --json && check '.ok'
+    calls "systemctl --user --no-block ${ACTION} stry-app.service" 1
+    calls_like "^podman (start|stop|restart)" 0
+done
+
+test_case "container NAME start|stop|restart runs podman for a container without a unit, by name or ID"
+lpod container scratch start --json && check '.ok'
+calls "podman start scratch" 1
+lpod container 444444444444 stop --json && check '.ok'
+calls "podman stop 444444444444" 1
+calls_like "^systemctl .*(start|stop|restart)" 0
+
+test_case "container NAME refuses an unknown container or action"
+lpod_status container ghost start --json
+exited_with 1
+said "No container named ghost."
+lpod_status container stry-app pause --json
+exited_with 1
+said "Usage: lpod container NAME"
+calls_like "^(podman|systemctl .*) (start|stop|restart|pause)" 0
+
+test_case "container NAME exec reports the command's exit code and output, and fails only on podman's own errors"
+lpod container stry-app exec --json -- sh -c 'echo out; echo err >&2; exit 3'
+check '. == {"contract": 1, "exit_code": 3, "stdout": "out\n", "stderr": "err\n"}'
+keeps_contract container-exec '.'
+lpod container stry-app exec --user www-data --workdir /app --json -- true && check '.exit_code == 0'
+calls "podman exec --user www-data --workdir /app stry-app true" 1
+lpod container stry-app exec --json -- sh -c 'head -c 70000 /dev/zero | tr "\0" a'
+check '(.stdout | length) == 65536'
+lpod_status container stry-app exec --user ghost --json -- true
+exited_with 1
+said "unable to find user ghost"
+holds "a failed exec printed JSON" test -z "$OUTPUT"
+
+test_case "container NAME exec only passes stdin on with --stdin"
+lpod container stry-app exec --stdin --json -- cat < <(printf 'p4ss')
+check '.stdout == "p4ss"'
+calls "podman exec --interactive stry-app cat" 1
+calls_like "p4ss" 0
+lpod container stry-app exec --json -- cat < <(printf 'p4ss')
+check '.stdout == ""'
+calls "podman exec: stdin is open" 0
+
+test_case "container NAME exec refuses a stopped container, a missing command and unknown options"
+lpod_status container scratch exec --json -- true
+exited_with 1
+said "scratch isn't running"
+lpod_status container stry-app exec --json
+exited_with 1
+said "Usage: lpod container NAME exec"
+lpod_status container stry-app exec --tty --json -- true
+exited_with 1
+said "Unknown option: --tty"
+calls_like "^podman exec" 0
+
+test_case "APP up and restart act on the main unit, and down stops every service"
+lpod stry up --json && check '.ok'
+calls "systemctl --user start stry-app.service" 1
+lpod stry restart --no-block --json && check '.ok'
+calls "systemctl --user --no-block restart stry-app.service" 1
+lpod stry down --json && check '.ok'
+calls "systemctl --user stop stry-app.service stry-valkey.service" 1
+lpod stry down --no-block --json && check '.ok'
+calls "systemctl --user --no-block stop stry-app.service stry-valkey.service" 1
+
+test_case "APP down --force kills every service, and clears its failed state"
+lpod stry down --force --json && check '.ok'
+calls "systemctl --user --no-block stop stry-app.service stry-valkey.service" 1
+calls "systemctl --user kill --signal=SIGKILL stry-app.service stry-valkey.service" 1
+calls "systemctl --user --quiet is-active stry-app.service stry-valkey.service" 1
+calls "systemctl --user reset-failed stry-app.service stry-valkey.service" 1
+lpod_status stry up --force --json
+exited_with 1
+said "--force only works with down."
+
+test_case "APP up, down and redeploy refuse an application that isn't installed"
+
+for ACTION in up down restart redeploy; do
+    lpod_status ghost "$ACTION" --json
+    exited_with 1
+    said "No application or Quadlet named ghost is installed."
+done
+
+calls_like "^(systemctl .*(start|stop|restart)|podman pull)" 0
+
+test_case "APP up and restart wake an on-demand application that sleeps"
+printf '# lpod-ondemand: {"port": 8000}\n[Socket]\nListenStream=8000\n' > "${XDG_CONFIG_HOME}/systemd/user/stry-ondemand.socket"
+lpod stry up --json && check '.ok'
+calls "systemctl --user start stry-ondemand.service" 1
+lpod stry restart --json && check '.ok'
+calls "systemctl --user restart stry-app.service" 1
+lpod stry down --json
+forget_calls
+lpod stry restart --json && check '.ok'
+calls "systemctl --user start stry-ondemand.service" 1
+calls_like "^systemctl .*(start|restart) stry-app.service" 0
+
+test_case "APP redeploy pulls every image from a registry, then restarts the main unit"
+lpod stry redeploy --json && check '.ok'
+calls "podman pull --quiet -- ghcr.io/francoism90/stry:4" 1
+calls "podman pull --quiet -- docker.io/library/valkey:9" 1
+holds "redeploy didn't restart the main unit last" test "$(tail -n 1 "$LPOD_TEST_LOG")" == "systemctl --user restart stry-app.service"
+
+test_case "APP redeploy skips images built on the host, and stops at a failed pull"
+jq 'map(if .Names[0] == "stry-valkey" then .Image = "localhost/valkey:dev" else . end)' "${LPOD_TEST_HOST}/ps.json" > "${WORK}/ps.json"
+mv "${WORK}/ps.json" "${LPOD_TEST_HOST}/ps.json"
+lpod stry redeploy --json && check '.ok'
+calls_like "^podman pull" 1
+calls_like "^podman pull .*localhost" 0
+jq 'map(if .Names[0] == "stry-valkey" then .Image = "docker.io/library/missing:1" else . end)' "${LPOD_TEST_HOST}/ps.json" > "${WORK}/ps.json"
+mv "${WORK}/ps.json" "${LPOD_TEST_HOST}/ps.json"
+forget_calls
+lpod_status stry redeploy --json
+exited_with 1
+said "manifest unknown"
+calls_like "^systemctl .*restart" 0
+
+test_case "APP redeploy --no-block hands the work to a transient unit"
+lpod stry redeploy --no-block --json && check '.ok'
+calls_like "^systemd-run --quiet --collect --no-block --user --unit lpod-redeploy-stry /.+ stry redeploy --json$" 1
+calls_like "^(podman pull|systemctl .*restart)" 0
+
 # Untrusted input (#53, #55): names, Quadlet values, repositories and .env
 # files come from users and Git repositories...
 
