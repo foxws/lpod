@@ -663,6 +663,213 @@ lpod_status quadlet fetch https://example.test/bare.git --ref main --depth 1 --j
 exited_with 1
 said "Unknown option: --depth"
 
+DROPINS="${LPOD_TEST_HOST}/quadlets/stry-app.container.d"
+
+test_case "APP files write writes a drop-in next to the application's Quadlet, and reloads systemd"
+lpod stry files write stry-app.container.d/memory.conf --stdin --json < <(printf '[Container]\nMemory=1g')
+check ". == {\"contract\": 1, \"file\": {\"name\": \"stry-app.container.d/memory.conf\", \"path\": \"${DROPINS}/memory.conf\", \"content\": \"[Container]\\nMemory=1g\"}}"
+keeps_contract app-files-write '.file'
+holds "the drop-in isn't readable by everyone" test "$(stat -c %a "${DROPINS}/memory.conf")" == 644
+calls "systemctl --user daemon-reload" 1
+lpod stry files write stry-app.container.d/memory.conf --stdin --json < <(printf '[Container]\nMemory=2g\n')
+check '.file.content == "[Container]\nMemory=2g\n"'
+holds "a temporary file was left behind" test -z "$(find "$DROPINS" -name '.lpod-write.*')"
+lpod stry files --json
+check 'any(.files[]; .name == "stry-app.container.d/memory.conf" and .content == "[Container]\nMemory=2g\n")'
+
+test_case "APP files write takes up to 256 KiB, and leaves nothing behind when it's more"
+lpod stry files write stry-app.container.d/big.conf --stdin --json < <(head -c 262144 /dev/zero | tr '\0' '#')
+check '(.file.content | length) == 262144'
+forget_calls
+lpod_status stry files write stry-app.container.d/bigger.conf --stdin --json < <(head -c 262145 /dev/zero | tr '\0' '#')
+exited_with 1
+said "A drop-in can be 256 KiB at most."
+holds "a drop-in over 256 KiB was left behind" test -z "$(find "$DROPINS" -name 'bigger.conf' -o -name '.lpod-write.*')"
+calls "systemctl --user daemon-reload" 0
+
+test_case "APP files write and remove refuse a name that isn't a drop-in of the application, or is lpod's own"
+mkdir -p "${WORK}/elsewhere"
+ln -sfn "${WORK}/elsewhere" "${LPOD_TEST_HOST}/quadlets/stry-valkey.container.d"
+
+for NAME in stry-app.container.d/lpod-ondemand.conf stry-app.container.d/../../x.conf stry-app.container.d/sub/x.conf \
+    stry-app.container.d/x.txt stry-app.container.d/.x.conf glance.container.d/x.conf stry-valkey.container.d/x.conf ../x.conf; do
+    lpod_status stry files write "$NAME" --stdin --json < <(printf '[Container]\n')
+    exited_with 1
+    lpod_status stry files remove "$NAME" --json
+    exited_with 1
+done
+
+said "isn't a file of stry."
+lpod_status stry files write stry-app.container.d/lpod-timer.conf --stdin --json < <(printf '[Service]\n')
+said "was written by lpod, so lpod's own command changes it."
+lpod_status stry files write stry-valkey.container.d/x.conf --stdin --json < <(printf '[Service]\n')
+said "is a symlink, which lpod leaves alone."
+holds "a drop-in was written through a symlink" test -z "$(ls -A "${WORK}/elsewhere")"
+calls "systemctl --user daemon-reload" 0
+
+test_case "APP files write needs one name and stdin"
+lpod_status stry files write stry-app.container.d/memory.conf --json < <(printf '[Container]\n')
+exited_with 1
+said "Usage: lpod APP files write NAME --stdin --json"
+lpod_status stry files write stry-app.container.d/a.conf stry-app.container.d/b.conf --stdin --json < <(printf '[Container]\n')
+exited_with 1
+said "Write one drop-in at a time."
+lpod_status stry files write stry-app.container.d/a.conf --stdin --force --json < <(printf '[Container]\n')
+exited_with 1
+said "Unknown option: --force"
+
+test_case "APP files remove removes Quadlets and drop-ins, and reloads systemd once"
+mkdir -p "$DROPINS"
+printf '[Container]\n' > "${DROPINS}/old.conf"
+lpod stry files remove stry-valkey.container stry-app.container.d/old.conf --json
+check '. == {"contract": 1, "removed": ["stry-valkey.container", "stry-app.container.d/old.conf"]}'
+keeps_contract app-files-remove '.'
+calls "podman quadlet rm --force -- stry-valkey.container" 1
+calls "systemctl --user daemon-reload" 1
+holds "old.conf is still there" test ! -e "${DROPINS}/old.conf"
+
+test_case "APP files remove removes nothing when one name isn't the application's"
+mkdir -p "$DROPINS"
+printf '[Container]\n' > "${DROPINS}/old.conf"
+
+for NAMES in "stry-app.container.d/old.conf glance.container" "stry-valkey.container stry-app.container.d/gone.conf" "stry-valkey.container stry-app.container.d/lpod-timer.conf"; do
+    # shellcheck disable=SC2086
+    lpod_status stry files remove $NAMES --json
+    exited_with 1
+done
+
+lpod_status stry files remove --json
+exited_with 1
+said "Usage: lpod APP files remove NAME... --json"
+holds "old.conf was removed" test -f "${DROPINS}/old.conf"
+calls_like "^(podman quadlet rm|systemctl --user daemon-reload)" 0
+
+BACKUP_TIMER="${XDG_CONFIG_HOME}/systemd/user/stry-backup.timer"
+TIMERS='{"timers": [
+    {"name": "backup", "container": "stry-app", "on_calendar": ["daily", "Mon *-*-* 03:00"], "persistent": true, "randomized_delay_sec": "5min", "timeout_start_sec": "1h"},
+    {"name": "warm", "container": "stry-valkey", "on_calendar": "*:0/15"}
+]}'
+
+test_case "APP timers set writes a timer for each container, and enables and starts them"
+lpod stry timers set --stdin --json <<< "$TIMERS" && check '.ok'
+holds "stry-backup.timer isn't as expected: $(cat "$BACKUP_TIMER")" cmp -s "$BACKUP_TIMER" <(cat <<'EOF'
+# Written by "lpod stry timers set". See "Timers" in lpod's docs/commands.md.
+# lpod-timer: {"app":"stry","name":"backup","container":"stry-app","service":"stry-app.service","on_calendar":["daily","Mon *-*-* 03:00"],"persistent":true,"randomized_delay_sec":"5min","timeout_start_sec":"1h"}
+[Unit]
+Description=stry backup timer
+
+[Timer]
+Unit=stry-app.service
+OnCalendar=daily
+OnCalendar=Mon *-*-* 03:00
+Persistent=true
+RandomizedDelaySec=5min
+
+[Install]
+WantedBy=timers.target
+EOF
+)
+holds "stry-warm.timer has directives it wasn't given" test "$(grep -cE '^(Persistent|RandomizedDelaySec)=' "${XDG_CONFIG_HOME}/systemd/user/stry-warm.timer")" -eq 0
+holds "the TimeoutStartSec drop-in isn't as expected" cmp -s "${DROPINS}/lpod-timer.conf" <(printf '# Written by "lpod stry timers set". See "Timers" in lpod'"'"'s docs/commands.md.\n[Service]\nTimeoutStartSec=1h\n')
+holds "stry-valkey got a drop-in without a timeout" test ! -e "${LPOD_TEST_HOST}/quadlets/stry-valkey.container.d"
+calls "systemctl --user daemon-reload" 1
+calls "systemctl --user enable stry-backup.timer stry-warm.timer" 1
+calls "systemctl --user restart stry-backup.timer stry-warm.timer" 1
+lpod stry timers --json
+check '[.timers[] | {name, container, service, on_calendar}] == [
+    {"name": "backup", "container": "stry-app", "service": "stry-app.service", "on_calendar": ["daily", "Mon *-*-* 03:00"]},
+    {"name": "warm", "container": "stry-valkey", "service": "stry-valkey.service", "on_calendar": ["*:0/15"]}
+]'
+keeps_contract app-timers '.timers[0]'
+
+test_case "APP timers set replaces the timers, and remove removes them with their drop-ins"
+lpod stry timers set --stdin --json <<< "$TIMERS"
+forget_calls
+lpod stry timers set --stdin --json <<< '{"timers": [{"name": "warm", "container": "stry-valkey", "on_calendar": "hourly"}]}' && check '.ok'
+calls "systemctl --user disable --now stry-backup.timer" 1
+holds "stry-backup.timer is still there" test ! -e "$BACKUP_TIMER"
+holds "the timer's drop-in directory is still there" test ! -e "$DROPINS"
+holds "stry-warm.timer wasn't replaced" grep -qx 'OnCalendar=hourly' "${XDG_CONFIG_HOME}/systemd/user/stry-warm.timer"
+lpod stry timers remove --json && check '.ok'
+calls "systemctl --user disable --now stry-warm.timer" 2
+lpod stry timers --json
+check '.timers == []'
+lpod stry timers set --stdin --json <<< '{"timers": []}' && check '.ok'
+calls_like "^systemctl --user enable" 1
+
+test_case "APP timers run starts the timer's service without waiting"
+lpod stry timers run backup --json && check '.ok'
+calls "systemctl --user --no-block start stry-app.service" 1
+lpod_status stry timers run ghost --json
+exited_with 1
+said "stry has no timer named ghost."
+
+test_case "APP timers set refuses timers it can't write, and changes nothing"
+printf '[Timer]\nOnCalendar=daily\n' > "${XDG_CONFIG_HOME}/systemd/user/stry-nightly.timer"
+cp "$BACKUP_TIMER" "${WORK}/backup.timer"
+
+while IFS= read -r TIMER; do
+    lpod_status stry timers set --stdin --json <<< "{\"timers\": [${TIMER}]}"
+    exited_with 1
+done <<'EOF'
+{"name": "Backup", "container": "stry-app", "on_calendar": "daily"}
+{"name": "../x", "container": "stry-app", "on_calendar": "daily"}
+{"name": "backup", "container": "stry-app"}
+{"name": "backup", "container": "stry-app", "on_calendar": []}
+{"name": "backup", "container": "stry-app", "on_calendar": "daily\nExecStart=/bin/sh"}
+{"name": "backup", "container": "glance", "on_calendar": "daily"}
+{"name": "backup", "container": "stry-app", "on_calendar": "daily"}, {"name": "backup", "container": "stry-valkey", "on_calendar": "daily"}
+{"name": "a", "container": "stry-app", "on_calendar": "daily"}, {"name": "b", "container": "stry-app", "on_calendar": "daily"}
+{"name": "idle", "container": "stry-app", "on_calendar": "daily"}
+{"name": "backup", "container": "stry-app", "on_calendar": "every tuesday"}
+{"name": "backup", "container": "stry-app", "on_calendar": "-h"}
+{"name": "backup", "container": "stry-app", "on_calendar": "daily", "persistent": "yes"}
+{"name": "backup", "container": "stry-app", "on_calendar": "daily", "randomized_delay_sec": "5parsecs"}
+{"name": "backup", "container": "stry-app", "on_calendar": "daily", "timeout_start_sec": "1h; rm -rf"}
+{"name": "nightly", "container": "stry-app", "on_calendar": "daily"}
+EOF
+
+said "stry-nightly.timer is already there, and lpod timers didn't write it."
+lpod_status stry timers set --stdin --json < <(jq -n '{timers: [range(21) | {name: "t\(.)", container: "stry-app", on_calendar: "daily"}]}')
+exited_with 1
+said "At most 20 timers."
+lpod_status stry timers set --stdin --json <<< 'not json'
+exited_with 1
+lpod_status stry timers set --json <<< "$TIMERS"
+exited_with 1
+said "--stdin"
+holds "a refused set changed stry-backup.timer" cmp -s "$BACKUP_TIMER" "${WORK}/backup.timer"
+calls_like "^systemctl --user (daemon-reload|enable|restart|disable)" 0
+calls_like "^systemd-analyze calendar -- -h" 0
+
+test_case "APP remove removes the application's Quadlets after its timers, and nothing else unless asked"
+lpod stry remove --json && check '.ok'
+calls "podman quadlet rm --force --recursive -- stry" 1
+calls_like "^podman (volume|image|secret) rm" 0
+holds "the timers weren't removed before the Quadlets" test "$(grep -n 'disable --now stry-backup.timer' "$LPOD_TEST_LOG" | cut -d: -f1)" -lt "$(grep -n 'quadlet rm' "$LPOD_TEST_LOG" | cut -d: -f1)"
+holds "stry-backup.timer is still there" test ! -e "$BACKUP_TIMER"
+
+test_case "APP remove removes a lone Quadlet by its file name"
+lpod glance remove --json && check '.ok'
+calls "podman quadlet rm --force -- glance.container" 1
+lpod_status ghost remove --json
+exited_with 1
+said "No application or Quadlet named ghost is installed."
+lpod_status stry remove --everything --json
+exited_with 1
+said "Unknown option: --everything"
+
+test_case "APP remove --volumes --images keeps what another application uses, however it's written"
+lpod stry remove --volumes --images --json && check '.ok'
+calls "podman volume rm -- stry-data" 1
+calls "podman image rm -- ghcr.io/francoism90/stry:4" 1
+calls "podman image rm -- docker.io/library/valkey:9" 1
+printf '%s\n' '[Container]' 'Image = "docker.io/library/valkey:9"' 'Mount=type=volume,source=stry-data.volume,target=/data' >> "${LPOD_TEST_HOST}/quadlets/glance.container"
+forget_calls
+lpod stry remove --volumes --images --json && check '.ok'
+calls_like "^podman (volume|image) rm" 1
+calls "podman image rm -- ghcr.io/francoism90/stry:4" 1
+
 # Untrusted input (#53, #55): names, Quadlet values, repositories and .env
 # files come from users and Git repositories...
 
