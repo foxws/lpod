@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# A stand-in for loginctl: "show-user USER --property=Linger --value" prints
+# LPOD_TEST_HOST/linger. Every call is logged to LPOD_TEST_LOG...
+
+HOST="${LPOD_TEST_HOST:?}"
+echo "loginctl $*" >> "${LPOD_TEST_LOG:?}"
+
+if [ "${1:-}" == "show-user" ]; then
+    cat "$HOST/linger"
+fi
