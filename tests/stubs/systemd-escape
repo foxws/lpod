@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# A stand-in for systemd-escape that escapes a plain name, such as an
+# application's, the way systemd does: "-" becomes "\x2d"...
+
+[ "${1:-}" == "--" ] && shift
+printf '%s\n' "${1//-/\\x2d}"

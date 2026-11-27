@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # A stand-in for systemctl: "show" prints the units in LPOD_TEST_HOST/units,
+# which start, restart, stop and kill change and is-active reads,
 # "list-units --failed" prints LPOD_TEST_HOST/failed-units, and every other
 # call succeeds. Every call is logged to LPOD_TEST_LOG...
 
@@ -11,7 +12,7 @@ VALUE=false
 
 for ARG in "$@"; do
     case "$ARG" in
-        --user|--timestamp=*|--property=*) ;;
+        --user|--timestamp=*|--property=*|--quiet|--no-block|--signal=*) ;;
         --value) VALUE=true ;;
         *) ARGS+=("$ARG") ;;
     esac
@@ -22,6 +23,35 @@ if [ "${ARGS[0]:-}" == "list-units" ] && [[ " ${ARGS[*]} " == *" --failed "* ]];
 
     exit 0
 fi
+
+# Sets the ActiveState and SubState of the UNITS in LPOD_TEST_HOST/units, so a
+# later "show" or "is-active" sees the change...
+function set_state {
+    local ACTIVE="$1" SUB="$2" UNIT
+    shift 2
+
+    for UNIT in "$@"; do
+        if [ -f "$HOST/units/$UNIT" ]; then
+            sed -i "s/^ActiveState=.*/ActiveState=${ACTIVE}/; s/^SubState=.*/SubState=${SUB}/" "$HOST/units/$UNIT"
+        else
+            printf 'Id=%s\nActiveState=%s\nSubState=%s\nResult=success\n' "$UNIT" "$ACTIVE" "$SUB" > "$HOST/units/$UNIT"
+        fi
+    done
+}
+
+# start, restart, stop and kill change the units' state, and is-active
+# succeeds when one of the units is active, like systemctl...
+case "${ARGS[0]:-}" in
+    start|restart) set_state active running "${ARGS[@]:1}"; exit 0 ;;
+    stop|kill) set_state inactive dead "${ARGS[@]:1}"; exit 0 ;;
+    is-active)
+        for UNIT in "${ARGS[@]:1}"; do
+            grep -qx 'ActiveState=active' "$HOST/units/$UNIT" 2> /dev/null && exit 0
+        done
+
+        exit 3
+        ;;
+esac
 
 if [ "${ARGS[0]:-}" != "show" ]; then
     exit 0
