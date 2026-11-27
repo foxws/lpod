@@ -47,6 +47,20 @@ case "$*" in
     "quadlet --help") echo "Manage Quadlets" ;;
     "version --format "*) echo "6.2.0" ;;
     "pull --quiet "*) cp "$HOST/images-pulled.json" "$HOST/images.json" ;;
+    "quadlet print "*)
+        if [ ! -f "$HOST/quadlets/$3" ]; then
+            echo "Error: no such quadlet $3" >&2
+
+            exit 125
+        fi
+
+        cat "$HOST/quadlets/$3"
+        ;;
+    # Removing always works, and the log shows what was removed...
+    "quadlet rm "*|"volume rm "*|"image rm "*|"secret rm "*|"network rm "*) ;;
+    # The secret's value comes on stdin, and is kept to compare...
+    "secret create "*) cat > "$HOST/secret-value" ;;
+    "cp "*) ;;
     "container inspect --format "*) shift 3; inspect_containers table "$@" ;;
     "container inspect "*) shift 2; inspect_containers "" "$@" ;;
     *) echo "podman stub: unexpected call: $*" >&2; exit 1 ;;

@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# A stand-in for xdg-open that only logs what it was asked to open to
+# LPOD_TEST_LOG...
+
+echo "xdg-open $*" >> "${LPOD_TEST_LOG:?}"

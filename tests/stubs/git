@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+# A stand-in for git: "clone" copies LPOD_TEST_HOST/repositories/NAME, where
+# NAME is the last part of the URL without ".git", with its symlinks as they
+# are, and "rev-parse" prints a fixed commit. Every call is logged to
+# LPOD_TEST_LOG...
+
+HOST="${LPOD_TEST_HOST:?}"
+echo "git $*" >> "${LPOD_TEST_LOG:?}"
+
+# The options before the command, "-c KEY=VALUE" and "-C DIR", don't change
+# the answer...
+ARGS=()
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -c|-C) shift 2 ;;
+        *) ARGS+=("$1"); shift ;;
+    esac
+done
+
+case "${ARGS[0]:-}" in
+    clone)
+        URL="${ARGS[-2]}"
+        REPOSITORY="${HOST}/repositories/$(basename "$URL" .git)"
+
+        if [ ! -d "$REPOSITORY" ]; then
+            echo "fatal: repository '${URL}' not found" >&2
+
+            exit 128
+        fi
+
+        cp -a "$REPOSITORY" "${ARGS[-1]}"
+        ;;
+    rev-parse) echo "abc1234" ;;
+    *) echo "git stub: unexpected call: $*" >&2; exit 1 ;;
+esac
