@@ -7,12 +7,21 @@ on:
 
 permissions:
   contents: write
+  # For the build provenance attestation of the release assets
+  id-token: write
+  attestations: write
 
 jobs:
   release:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          # A release builds from scratch, never from a cache another run wrote
+          cache: false
 
       - name: Bake the tag into LPOD_VERSION
         run: |
@@ -21,12 +30,32 @@ jobs:
           chmod +x bin/lpod install.sh
           ./bin/lpod --version
 
+      # Static binaries, without cgo, for the architectures install.sh knows.
+      # The bash script ships next to them as lpod.sh.
+      - name: Build the binaries
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          mkdir dist
+
+          for ARCH in amd64 arm64; do
+            CGO_ENABLED=0 GOOS=linux GOARCH="$ARCH" go build -trimpath \
+              -ldflags "-s -w -X main.version=${VERSION}" \
+              -o "dist/lpod-linux-${ARCH}" ./cmd/lpod
+          done
+
       - name: Collect the release assets and their checksums
         run: |
-          mkdir dist
           cp bin/lpod install.sh dist/
-          (cd dist && sha256sum lpod install.sh > SHA256SUMS)
+          (cd dist && sha256sum lpod lpod-linux-amd64 lpod-linux-arm64 install.sh > SHA256SUMS)
           cat dist/SHA256SUMS
+
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: |
+            dist/lpod
+            dist/lpod-linux-amd64
+            dist/lpod-linux-arm64
+            dist/install.sh
 
       - name: Create or update GitHub release
         env:

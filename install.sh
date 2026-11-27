@@ -11,8 +11,13 @@
 #
 # LPOD_VERSION pins a release (e.g. v2.2.0), LPOD_BRANCH installs a branch
 # instead (e.g. main, unverified, reporting its version as dev-BRANCH), and
-# LPOD_INSTALL_DIR changes where the scripts go (default ~/.local/bin, or
+# LPOD_INSTALL_DIR changes where lpod goes (default ~/.local/bin, or
 # /usr/local/bin as root).
+#
+# On amd64 and arm64, a release installs the Go binary as lpod and the bash
+# script next to it as lpod.sh, which the binary hands the commands it
+# doesn't implement yet to. Elsewhere, for a branch, and for a release
+# without binaries, the bash script is lpod itself...
 #
 # Everything runs from "main" on the last line, so a download cut off
 # halfway through "curl | bash" never runs a partial script...
@@ -59,6 +64,15 @@ function has_tty {
 
 function has_systemd_session {
     "${SYSTEMCTL_CMD[@]}" show-environment >/dev/null 2>&1
+}
+
+# The name of the release's binary for this machine, or nothing when there's
+# none for it...
+function binary_name {
+    case "$(uname -m)" in
+        x86_64|amd64) echo "lpod-linux-amd64" ;;
+        aarch64|arm64) echo "lpod-linux-arm64" ;;
+    esac
 }
 
 function download_url {
@@ -164,17 +178,42 @@ function do_install {
         verify "$NAME" "${STAGING}/${NAME}" "${STAGING}/SHA256SUMS"
     done
 
+    # The Go binary, which a branch, a release before v4.3.0 and other
+    # architectures don't have. Without it, the bash script is lpod...
+    local BINARY=""
+
+    if [ -z "$BRANCH" ]; then
+        BINARY="$(binary_name)"
+    fi
+
+    if [ -n "$BINARY" ]; then
+        if fetch "$BINARY" "${STAGING}/${BINARY}" 2>/dev/null; then
+            verify "$BINARY" "${STAGING}/${BINARY}" "${STAGING}/SHA256SUMS"
+        else
+            info "${VERSION} has no ${BINARY}, so lpod is the bash script."
+            BINARY=""
+        fi
+    fi
+
     # A release has its version baked in; a branch says which branch it is...
     if [ -n "$BRANCH" ]; then
         sed -i "s/^LPOD_VERSION=\"dev\"\$/LPOD_VERSION=\"dev-${BRANCH//\//-}\"/" "${STAGING}/lpod"
     fi
 
     mkdir -p "$INSTALL_DIR"
+    chmod +x "${STAGING}/lpod"
 
-    for NAME in "${FILES[@]}"; do
-        chmod +x "${STAGING}/${NAME}"
-        mv "${STAGING}/${NAME}" "${INSTALL_DIR}/${NAME}"
-    done
+    if [ -n "$BINARY" ]; then
+        chmod +x "${STAGING}/${BINARY}"
+
+        # The script goes first, so the new binary finds it as soon as it
+        # replaces the old lpod...
+        mv "${STAGING}/lpod" "${INSTALL_DIR}/lpod.sh"
+        mv "${STAGING}/${BINARY}" "${INSTALL_DIR}/lpod"
+    else
+        mv "${STAGING}/lpod" "${INSTALL_DIR}/lpod"
+        rm -f "${INSTALL_DIR}/lpod.sh"
+    fi
 
     # lpod-setup rendered laravel-podman presets, and was dropped in v4...
     rm -f "${INSTALL_DIR}/lpod-setup"
@@ -240,7 +279,7 @@ function do_uninstall {
         "${SYSTEMCTL_CMD[@]}" daemon-reload
     fi
 
-    for NAME in "${FILES[@]}" lpod-setup; do
+    for NAME in "${FILES[@]}" lpod.sh lpod-setup; do
         rm -f "${INSTALL_DIR:?}/${NAME}"
     done
 
