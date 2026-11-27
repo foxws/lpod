@@ -1,10 +1,12 @@
 # lpod
 
-lpod is one bash script (`bin/lpod`) for running Podman Quadlet applications on a host. [Pods](https://github.com/foxws/pods) runs its `--json` commands over SSH, and people use the rest directly. The Go port is planned in [#59](https://github.com/foxws/lpod/issues/59).
+lpod runs Podman Quadlet applications on a host. [Pods](https://github.com/foxws/pods) runs its `--json` commands over SSH, and people use the rest directly. It's being ported from a bash script (`bin/lpod`) to Go, one command at a time, as planned in [#59](https://github.com/foxws/lpod/issues/59).
 
 ## Layout
 
-- `bin/lpod`: the whole tool. The release workflow replaces `LPOD_VERSION`, and `LPOD_CONTRACT` is the version of the JSON contract.
+- `bin/lpod`: the bash script, which still implements every command. The release workflow replaces `LPOD_VERSION`, and `LPOD_CONTRACT` is the version of the JSON contract.
+- `cmd/lpod` and `internal/`: the Go port. The binary hands every command it doesn't implement yet to the bash script, installed next to it as `lpod.sh` (`internal/handoff`).
+- `.devcontainer/`: a development container with Go, shellcheck, jq and gh.
 - `install.sh`: the installer, which `lpod self-update` also runs. It checks every download against the release's `SHA256SUMS`.
 - `docs/commands.md`: the reference for every command and its JSON output.
 - `tests/`:
@@ -35,6 +37,17 @@ Follow the code around your change:
 - `podman stats` is slow, so only call `host_containers_json --stats` where CPU or memory is shown.
 - shellcheck must pass. Disable a check (`# shellcheck disable=SC…`) only where the warning is wrong, on that line.
 
+## Go
+
+The port follows the plan in [#59](https://github.com/foxws/lpod/issues/59): rootless first, one command at a time, straight to `main`.
+
+- **Porting a command:** the Go binary handles it, and only then is the bash version removed. The command keeps the exact JSON output and exit codes, and `tests/run.sh` must still pass through the binary.
+- **Dependencies:** prefer well-maintained modules over lpod's own logic, such as go-systemd and Podman's own packages. Build without cgo (`CGO_ENABLED=0`), so the binary stays static.
+- **Code copied from another project,** such as lerd, keeps that project's license notice.
+- **Checks:** `gofmt`, `go vet`, golangci-lint (`.golangci.yml`), `govulncheck` and `go test -race ./...` all run in CI, next to shellcheck and `tests/run.sh`.
+- **Version:** releases set it with `-ldflags "-X main.version=…"`, and the bash script keeps its own `LPOD_VERSION`.
+- **Trying a build from a checkout:** set `LPOD_SCRIPT` to `bin/lpod`, so the binary hands commands to that script instead of an `lpod.sh` next to it.
+
 ## Security
 
 Pods passes values from users, Git repositories and Quadlet files to lpod. Treat every argument, file name and Quadlet value as untrusted:
@@ -59,7 +72,7 @@ Pods passes values from users, Git repositories and Quadlet files to lpod. Treat
   - how often lpod asks the host (`calls`).
 - Add a case for every change in behaviour. A stand-in fails on a call it doesn't know ("unexpected call"), so extend it and `tests/host` when a command needs more.
 - The stand-ins aren't Podman or systemd. When a change hasn't run on a real host, rootless and rootful, say so in the PR.
-- Run `shellcheck bin/lpod install.sh tests/run.sh tests/stubs/*` and `tests/run.sh` before you push.
+- Run `shellcheck bin/lpod install.sh tests/run.sh tests/stubs/*` and `tests/run.sh` before you push. For Go changes, also run `go test ./...`, and `tests/run.sh` through a build of the binary (`LPOD_UNDER_TEST`, see the README).
 
 ## Commits, pull requests and releases
 
@@ -67,6 +80,6 @@ Pods passes values from users, Git repositories and Quadlet files to lpod. Treat
 - Commits follow Conventional Commits (`fix:`, `feat:`, `perf:`, `refactor:`, `test:`, `docs:`, `chore:`), with a lowercase summary in the present tense and a body of short `-` bullets.
 - A PR description says what changes. When there are behaviour changes, it lists them under "Behavior changes, for the release notes". It ends with "Checked": what ran, and what didn't. PRs are squash-merged.
 - **Release:**
-  - Tag `vX.Y.Z` on `main`. `release.yml` puts the version in `bin/lpod`, attaches `lpod`, `install.sh` and `SHA256SUMS`, and generates the notes.
+  - Tag `vX.Y.Z` on `main`. `release.yml` puts the version in `bin/lpod` and builds `lpod-linux-amd64` and `lpod-linux-arm64`. It attaches those, `lpod` (the bash script), `install.sh` and `SHA256SUMS`, with build provenance, and generates the notes.
   - Above the generated notes, add a short header: who should update, and what changes for them ("Before you update").
   - Then bump `PODS_LPOD_VERSION` and `LPOD_REF` in Pods.

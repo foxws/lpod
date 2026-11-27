@@ -1,0 +1,33 @@
+# The development container for lpod, for VS Code Dev Containers with Podman
+# (see devcontainer.json): Go, shellcheck, jq and gh, and Claude Code. It has
+# no Podman or systemd of its own, so tests/run.sh uses its stand-ins, and
+# real hosts are tried over SSH.
+ARG GO_VERSION=1.27.4
+
+FROM docker.io/library/golang:${GO_VERSION}-trixie
+
+ARG CLAUDE_CLI="latest"
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gh jq nano procps shellcheck \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
+
+# The same user as Pods' development container, which --userns=keep-id
+# maps to yours on the host
+RUN groupadd --gid 1000 docker \
+    && useradd --uid 1000 --gid 1000 --create-home --shell /bin/bash docker
+
+USER docker
+
+ENV GOPATH="/home/docker/go"
+ENV PATH="${PATH}:/home/docker/go/bin:/home/docker/.local/bin"
+
+# Claude Code through its native installer, which keeps the binary in
+# ~/.local, so it survives the ~/.claude bind mount. Set CLAUDE_CLI=false to
+# skip it, or to a channel or version (stable, 2.1.89) to pin it.
+RUN if [ "$CLAUDE_CLI" != "false" ]; then \
+    curl -fsSL https://claude.ai/install.sh | bash -s "$CLAUDE_CLI"; \
+fi
+
+CMD ["sleep", "infinity"]
