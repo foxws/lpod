@@ -46,7 +46,29 @@ case "$*" in
     "info --format "*) printf '%s\t%s\t%s\n' "${HOST}/storage" "$(cat "$HOST/storage-driver")" netavark ;;
     "quadlet --help") echo "Manage Quadlets" ;;
     "version --format "*) echo "6.2.0" ;;
+    "pull --quiet "*missing*) echo "Error: initializing source docker://${3}: manifest unknown" >&2; exit 125 ;;
     "pull --quiet "*) cp "$HOST/images-pulled.json" "$HOST/images.json" ;;
+    # A prune prints what it removed, kept in LPOD_TEST_HOST/pruned-KIND, and
+    # fails like podman when LPOD_TEST_HOST/prune-fails exists...
+    "image prune --all --force"|"container prune --force"|"volume prune --force"|"network prune --force")
+        if [ -e "$HOST/prune-fails" ]; then
+            echo "Error: cannot prune: database is locked" >&2
+
+            exit 125
+        fi
+
+        if [ -f "$HOST/pruned-$1" ]; then
+            cat "$HOST/pruned-$1"
+        fi
+        ;;
+    # Podman refuses an image a container uses...
+    "image rm -- "*|"image rm "[!-]*)
+        if jq -e --arg id "${*: -1}" 'any(.[]; (.Id | startswith($id)) and (.Containers // 0) > 0)' "$HOST/images.json" > /dev/null; then
+            echo "Error: image used by container: ${*: -1}" >&2
+
+            exit 2
+        fi
+        ;;
     "quadlet print "*)
         if [ ! -f "$HOST/quadlets/$3" ]; then
             echo "Error: no such quadlet $3" >&2
@@ -56,7 +78,7 @@ case "$*" in
 
         cat "$HOST/quadlets/$3"
         ;;
-    # Removing always works, and the log shows what was removed...
+    # Removing anything else always works, and the log shows what was removed...
     "quadlet rm "*|"volume rm "*|"image rm "*|"secret rm "*|"network rm "*) ;;
     # The secret's value comes on stdin, and is kept to compare...
     "secret create "*) cat > "$HOST/secret-value" ;;

@@ -3930,7 +3930,8 @@ function cmd_image_json {
 }
 
 # Prints the outcome of a prune: the REMOVED names on stdin, and the bytes
-# RECLAIMED (or "null" when unknown)...
+# RECLAIMED (or "null" when unknown). The prune runs first, on its own, so
+# its failure is lpod's: in a pipe, only this function's status would count...
 function prune_result_json {
     local RECLAIMED="$1"
 
@@ -3946,10 +3947,11 @@ function cmd_images_prune_json {
     require_jq
 
     local PODMAN="${LPOD_PODMAN_BINARY:-podman}"
-    local RECLAIMED
+    local RECLAIMED REMOVED
     RECLAIMED="$("$PODMAN" images --format json | jq '[.[] | select((.Containers // 0) == 0 and ((.ReadOnly // false) | not)) | .Size // 0] | add // 0')"
 
-    "$PODMAN" image prune --all --force | prune_result_json "${RECLAIMED:-null}"
+    REMOVED="$("$PODMAN" image prune --all --force)" || return 1
+    prune_result_json "${RECLAIMED:-null}" <<< "$REMOVED"
 }
 
 # "lpod auto-update --dry-run --json": asks the registries which images have
@@ -4037,7 +4039,9 @@ function cmd_pods_json {
 function cmd_containers_prune_json {
     require_jq
 
-    "${LPOD_PODMAN_BINARY:-podman}" container prune --force | prune_result_json null
+    local REMOVED
+    REMOVED="$("${LPOD_PODMAN_BINARY:-podman}" container prune --force)" || return 1
+    prune_result_json null <<< "$REMOVED"
 }
 
 # "lpod events --json [--since DURATION] [--limit N]": what happened to
@@ -4324,7 +4328,9 @@ function volume_export {
 function cmd_volumes_prune_json {
     require_jq
 
-    "${LPOD_PODMAN_BINARY:-podman}" volume prune --force | prune_result_json null
+    local REMOVED
+    REMOVED="$("${LPOD_PODMAN_BINARY:-podman}" volume prune --force)" || return 1
+    prune_result_json null <<< "$REMOVED"
 }
 
 # "lpod networks --json"...
@@ -4397,7 +4403,9 @@ function cmd_network_json {
 function cmd_networks_prune_json {
     require_jq
 
-    "${LPOD_PODMAN_BINARY:-podman}" network prune --force | prune_result_json null
+    local REMOVED
+    REMOVED="$("${LPOD_PODMAN_BINARY:-podman}" network prune --force)" || return 1
+    prune_result_json null <<< "$REMOVED"
 }
 
 # "lpod journal --json [--lines N] [--since TIME|boot] [--priority N]": the

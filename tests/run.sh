@@ -333,6 +333,67 @@ if [ "$(id -u)" -ne 0 ]; then
     check 'first(.checks[] | select(.id == "runtime-dir")).status == "fail" and ([.checks[] | select(.id == "user-bus")] == []) and .failures >= 1'
 fi
 
+test_case "image pull pulls the reference, and a failed pull fails with podman's error"
+lpod image pull docker.io/library/valkey:9 --json && check '.ok'
+calls "podman pull --quiet docker.io/library/valkey:9" 1
+lpod_status image pull docker.io/library/missing:1 --json
+exited_with 1
+said "manifest unknown"
+holds "a failed pull printed JSON" test -z "$OUTPUT"
+
+test_case "image rm removes an image by its ID, and fails while a container uses it"
+UNUSED="e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5"
+jq --arg id "$UNUSED" '. + [{Id: $id, Names: ["docker.io/library/alpine:3"], Containers: 0, Size: 8000000}]' \
+    "${LPOD_TEST_HOST}/images.json" > "${WORK}/images.json" && mv "${WORK}/images.json" "${LPOD_TEST_HOST}/images.json"
+lpod image rm "${UNUSED:0:12}" --json && check '.ok'
+calls "podman image rm ${UNUSED:0:12}" 1
+lpod_status image rm "${OLD_VALKEY:0:12}" --json
+exited_with 1
+said "image used by container"
+
+test_case "images prune reports the short IDs it removed and the bytes of the unused images"
+jq --arg id "$UNUSED" '. + [
+    {Id: $id, Names: ["docker.io/library/alpine:3"], Containers: 0, Size: 8000000},
+    {Id: ("f6" * 32), Names: ["docker.io/library/busybox:1"], Containers: 0, Size: 4000000},
+    {Id: ("f7" * 32), Names: ["docker.io/library/debian:13"], Containers: 0, Size: 50000000, ReadOnly: true}
+]' "${LPOD_TEST_HOST}/images.json" > "${WORK}/images.json" && mv "${WORK}/images.json" "${LPOD_TEST_HOST}/images.json"
+printf '%s\n' "$UNUSED" "$(printf 'f6%.0s' {1..32})" > "${LPOD_TEST_HOST}/pruned-image"
+lpod images prune --json
+check '.removed == ["e5e5e5e5e5e5", "f6f6f6f6f6f6"] and .reclaimed == 12000000'
+keeps_contract image-prune '.'
+calls "podman image prune --all --force" 1
+
+test_case "containers, volumes and networks prune report what they removed"
+printf '%s\n' "$(printf 'ab%.0s' {1..32})" > "${LPOD_TEST_HOST}/pruned-container"
+printf '%s\n' stry-cache "$(printf '9c%.0s' {1..32})" > "${LPOD_TEST_HOST}/pruned-volume"
+printf 'iot\n' > "${LPOD_TEST_HOST}/pruned-network"
+lpod containers prune --json
+check '. == {"contract": 1, "removed": ["abababababab"], "reclaimed": null}'
+keeps_contract container-prune '.'
+lpod volumes prune --json
+check '.removed == ["stry-cache", "9c9c9c9c9c9c"] and .reclaimed == null'
+keeps_contract volume-prune '.'
+lpod networks prune --json
+check '. == {"contract": 1, "removed": ["iot"], "reclaimed": null}'
+keeps_contract network-prune '.'
+calls_like "^podman (container|volume|network) prune --force$" 3
+
+test_case "a prune with nothing to remove reports an empty list"
+lpod images prune --json
+check '.removed == [] and .reclaimed == 0'
+lpod networks prune --json
+check '.removed == []'
+
+test_case "a prune fails when podman does"
+touch "${LPOD_TEST_HOST}/prune-fails"
+
+for KIND in images containers volumes networks; do
+    lpod_status "$KIND" prune --json
+    exited_with 1
+    said "database is locked"
+    holds "a failed ${KIND} prune printed JSON" test -z "$OUTPUT"
+done
+
 # Untrusted input (#53, #55): names, Quadlet values, repositories and .env
 # files come from users and Git repositories...
 
