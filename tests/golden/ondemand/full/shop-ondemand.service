@@ -1,0 +1,8 @@
+# Written by "lpod shop ondemand enable". See "On-demand" in lpod's docs/commands.md.
+[Unit]
+Description=shop on-demand proxy
+Requires=shop.service shop-ondemand.socket
+After=shop.service shop-ondemand.socket
+
+[Service]
+ExecStart=@STUBS@/systemd-socket-proxyd --exit-idle-time=15min 127.0.0.1:18080

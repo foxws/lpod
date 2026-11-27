@@ -1,0 +1,8 @@
+# Written by "lpod shop ondemand enable". See "On-demand" in lpod's docs/commands.md.
+[Unit]
+Description=shop idle check timer
+PartOf=shop-ondemand.socket
+
+[Timer]
+OnCalendar=*-*-* *:*:10
+AccuracySec=15s
