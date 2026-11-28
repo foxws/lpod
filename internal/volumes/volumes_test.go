@@ -94,7 +94,7 @@ func TestListInspectsEveryContainerOnce(t *testing.T) {
 		return []byte(`[]`), nil
 	}}
 
-	if _, err := List(context.Background(), client, t.TempDir()); err != nil || inspects != 1 {
+	if _, err := List(context.Background(), client, nil); err != nil || inspects != 1 {
 		t.Errorf("got %v after %d inspects, want one", err, inspects)
 	}
 }
@@ -103,7 +103,7 @@ func TestListStopsWhenPodmanFails(t *testing.T) {
 	failure := errors.New("podman volume: Error: database is locked")
 	client := podman.Client{Binary: "podman", Run: func(context.Context, string, ...string) ([]byte, error) { return nil, failure }}
 
-	if _, err := List(context.Background(), client, t.TempDir()); !errors.Is(err, failure) {
+	if _, err := List(context.Background(), client, nil); !errors.Is(err, failure) {
 		t.Errorf("got %v, want %v", err, failure)
 	}
 }

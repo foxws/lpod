@@ -8,8 +8,7 @@ Code copied or adapted from another project, such as [lerd](https://github.com/l
 
 | File | From | Commit | License |
 | --- | --- | --- | --- |
-
-None yet.
+| [internal/quadlet/quadlet.go](internal/quadlet/quadlet.go) (`read`) | [Podman](https://github.com/podman-container-tools/podman), `loadUnitDropins` in `cmd/quadlet/main.go` | `3471162efb28760529d852706c493c29245def6d` (v6.2.1) | Apache-2.0 |
 
 ## Go modules
 
@@ -19,5 +18,6 @@ The release binaries include the Go modules in [go.mod](go.mod). Each module's l
 | --- | --- |
 | [github.com/spf13/cobra](https://github.com/spf13/cobra) | Apache-2.0 |
 | [github.com/spf13/pflag](https://github.com/spf13/pflag) | BSD-3-Clause |
-| [go.podman.io/podman/v6](https://github.com/containers/podman), only `pkg/systemd/parser` | Apache-2.0 |
+| [go.podman.io/podman/v6](https://github.com/podman-container-tools/podman), only `pkg/systemd/parser` and `pkg/systemd/quadlet` | Apache-2.0 |
+| [go.podman.io/storage](https://github.com/podman-container-tools/container-libs), only `pkg/regexp` | Apache-2.0 |
 | [github.com/inconshreveable/mousetrap](https://github.com/inconshreveable/mousetrap) | Apache-2.0, only in Windows builds, so not in lpod's |

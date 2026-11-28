@@ -76,7 +76,7 @@ func TestListDoesntInspectContainers(t *testing.T) {
 		return []byte(`[]`), nil
 	}}
 
-	if _, err := List(context.Background(), client, t.TempDir()); err != nil || len(calls) != 3 {
+	if _, err := List(context.Background(), client, nil); err != nil || len(calls) != 3 {
 		t.Errorf("got %v after %q, want three calls", err, calls)
 	}
 }
@@ -85,7 +85,7 @@ func TestListStopsWhenPodmanFails(t *testing.T) {
 	failure := errors.New("podman network: Error: database is locked")
 	client := podman.Client{Binary: "podman", Run: func(context.Context, string, ...string) ([]byte, error) { return nil, failure }}
 
-	if _, err := List(context.Background(), client, t.TempDir()); !errors.Is(err, failure) {
+	if _, err := List(context.Background(), client, nil); !errors.Is(err, failure) {
 		t.Errorf("got %v, want %v", err, failure)
 	}
 }

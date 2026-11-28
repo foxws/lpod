@@ -28,9 +28,9 @@ type Host struct {
 	Containers []podman.Container
 }
 
-// List reads the networks, the Quadlets and their files in quadletDir, and
+// List reads the networks, the Quadlets and their files, with drop-ins from quadletDirs, and
 // the containers, and lists the networks.
-func List(ctx context.Context, client podman.Client, quadletDir string) (contract.Networks, error) {
+func List(ctx context.Context, client podman.Client, quadletDirs []string) (contract.Networks, error) {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
@@ -46,7 +46,7 @@ func List(ctx context.Context, client podman.Client, quadletDir string) (contrac
 		return contract.Networks{}, err
 	}
 
-	host.Units = quadlet.Load(quadlets, quadletDir)
+	host.Units = quadlet.Load(quadlets, quadletDirs)
 
 	if host.Containers, err = client.Containers(ctx); err != nil {
 		return contract.Networks{}, err

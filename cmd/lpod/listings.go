@@ -55,10 +55,10 @@ func newListings() []*cobra.Command {
 			return pods.List(ctx, client)
 		}),
 		newListing("volumes", "List the volumes, and the folders containers mount", func(ctx context.Context, client podman.Client) (any, error) {
-			return volumes.List(ctx, client, quadlet.Dir(rootful(), os.Getenv))
+			return volumes.List(ctx, client, quadlet.SearchDirs(rootful()))
 		}),
 		newListing("networks", "List the networks, with what uses them", func(ctx context.Context, client podman.Client) (any, error) {
-			return networks.List(ctx, client, quadlet.Dir(rootful(), os.Getenv))
+			return networks.List(ctx, client, quadlet.SearchDirs(rootful()))
 		}),
 	}
 }

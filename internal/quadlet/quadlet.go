@@ -1,3 +1,8 @@
+// Parts of this file (read) are adapted from loadUnitDropins in Podman's
+// cmd/quadlet/main.go, commit 3471162efb28760529d852706c493c29245def6d
+// (v6.2.1). Copyright The Podman Authors. Licensed under the Apache License,
+// Version 2.0: https://www.apache.org/licenses/LICENSE-2.0
+
 // Package quadlet reads installed Quadlet files the way Quadlet does: with
 // Podman's own parser, and with their drop-ins merged in.
 //
@@ -14,6 +19,7 @@ import (
 	"strings"
 
 	"go.podman.io/podman/v6/pkg/systemd/parser"
+	podmanquadlet "go.podman.io/podman/v6/pkg/systemd/quadlet"
 
 	"github.com/foxws/lpod/internal/podman"
 )
@@ -40,14 +46,23 @@ type Unit struct {
 	File *parser.UnitFile
 }
 
-// Load reads the file of each of quadlets, with its drop-ins from its own
-// directory and from dir. A file that can't be read is empty, so a broken
-// Quadlet still shows up, without what it says.
-func Load(quadlets []podman.Quadlet, dir string) []Unit {
+// SearchDirs are the directories Quadlet reads units and drop-ins from,
+// with their subdirectories, as Podman's own Quadlet generator lists them.
+// For a user, they include $XDG_CONFIG_HOME/containers/systemd and
+// /etc/containers/systemd/users.
+func SearchDirs(rootful bool) []string {
+	return podmanquadlet.GetUnitDirs(!rootful, true)
+}
+
+// Load reads the file of each of quadlets, with its drop-ins from dirs
+// (see SearchDirs) and from the directory the file is in. A file that
+// can't be read is empty, so a broken Quadlet still shows up, without what
+// it says.
+func Load(quadlets []podman.Quadlet, dirs []string) []Unit {
 	units := make([]Unit, 0, len(quadlets))
 
 	for _, quadlet := range quadlets {
-		file, err := read(quadlet.Path, []string{filepath.Dir(quadlet.Path), dir})
+		file, err := read(quadlet.Path, dirs)
 		if err != nil {
 			file = parser.NewUnitFile()
 			file.Filename = quadlet.Name
@@ -59,33 +74,48 @@ func Load(quadlets []podman.Quadlet, dir string) []Unit {
 	return units
 }
 
-// read parses the unit at path, and merges in its drop-ins from dirs. Like
-// Quadlet, it searches each directory for the drop-in directories of the
-// unit, from the most specific ("demo-app.container.d") to the broadest
-// ("container.d"). The first drop-in of a name wins, and they're applied
-// in the order of their names.
+// read parses the unit at path, and merges in its drop-ins, as Quadlet's
+// loadUnitDropins does (cmd/quadlet in Podman, which can't be imported).
+// The drop-in directories of the unit go from the most specific
+// ("demo-app.container.d") to the broadest ("container.d"), and each is
+// looked for in every one of dirs, and then next to the file itself, after
+// following a symlink to it. The first drop-in of a name wins, and they're
+// applied in the order of their names.
 func read(path string, dirs []string) (*parser.UnitFile, error) {
 	file, err := parser.ParseUnitFile(path)
 	if err != nil {
 		return nil, err
 	}
 
-	dropins := map[string]string{}
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		resolved = path
+	}
 
-	for _, dir := range slices.Compact(dirs) {
-		for _, dropinDir := range file.GetUnitDropinPaths() {
-			entries, err := os.ReadDir(filepath.Join(dir, dropinDir))
+	dropins := map[string]string{}
+	searched := map[string]bool{}
+
+	for _, dropinDir := range file.GetUnitDropinPaths() {
+		for _, dir := range append(slices.Clone(dirs), filepath.Dir(resolved)) {
+			candidate := filepath.Join(dir, dropinDir)
+			if searched[candidate] {
+				continue
+			}
+
+			searched[candidate] = true
+
+			entries, err := os.ReadDir(candidate)
 			if err != nil {
 				continue
 			}
 
 			for _, entry := range entries {
 				name := entry.Name()
-				if _, seen := dropins[name]; seen || entry.IsDir() || !strings.HasSuffix(name, ".conf") {
+				if _, seen := dropins[name]; seen || entry.IsDir() || filepath.Ext(name) != ".conf" {
 					continue
 				}
 
-				dropins[name] = filepath.Join(dir, dropinDir, name)
+				dropins[name] = filepath.Join(candidate, name)
 			}
 		}
 	}

@@ -34,7 +34,7 @@ func load(t *testing.T, name string, files map[string]string) Unit {
 	dir := t.TempDir()
 	write(t, dir, files)
 
-	return Load([]podman.Quadlet{{Name: name, Path: filepath.Join(dir, "demo", name)}}, dir)[0]
+	return Load([]podman.Quadlet{{Name: name, Path: filepath.Join(dir, "demo", name)}}, []string{dir})[0]
 }
 
 func TestTheParserReadsWhatLinesByHandMissed(t *testing.T) {
@@ -95,8 +95,54 @@ func TestTheMostSpecificDropinOfANameWins(t *testing.T) {
 	}
 }
 
+func TestASpecificDropinWinsOverABroadOneOfTheSameNameElsewhere(t *testing.T) {
+	// The broad one is next to the Quadlet, and the specific one in the
+	// Quadlet directory. Quadlet looks for the specific directory in every
+	// place before the broad one...
+	unit := load(t, "demo-app.container", map[string]string{
+		"demo/demo-app.container":          "[Container]\nImage=one\n",
+		"demo/container.d/memory.conf":     "[Container]\nImage=broad\n",
+		"demo-app.container.d/memory.conf": "[Container]\nImage=specific\n",
+	})
+
+	if got := unit.Last("Image"); got != "specific" {
+		t.Errorf("Image is %q, want the specific drop-in's", got)
+	}
+}
+
+func TestDropinsNextToASymlinkedQuadletsFileCount(t *testing.T) {
+	real := t.TempDir()
+	write(t, real, map[string]string{
+		"demo-app.container":              "[Container]\nImage=one\n",
+		"demo-app.container.d/image.conf": "[Container]\nImage=next-to-the-file\n",
+	})
+
+	dir := t.TempDir()
+	if err := os.Symlink(filepath.Join(real, "demo-app.container"), filepath.Join(dir, "demo-app.container")); err != nil {
+		t.Fatal(err)
+	}
+
+	unit := Load([]podman.Quadlet{{Name: "demo-app.container", Path: filepath.Join(dir, "demo-app.container")}}, []string{dir})[0]
+
+	if got := unit.Last("Image"); got != "next-to-the-file" {
+		t.Errorf("Image is %q, want the drop-in next to the real file", got)
+	}
+}
+
+func TestSearchDirsAreQuadlets(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", "/srv/config")
+
+	if dirs := SearchDirs(false); !slices.Contains(dirs, "/srv/config/containers/systemd") {
+		t.Errorf("got %q, want the user's Quadlet directory", dirs)
+	}
+
+	if dirs := SearchDirs(true); !slices.Contains(dirs, "/etc/containers/systemd") {
+		t.Errorf("got %q, want the system's Quadlet directory", dirs)
+	}
+}
+
 func TestAQuadletThatCantBeReadIsEmpty(t *testing.T) {
-	unit := Load([]podman.Quadlet{{Name: "gone.container", Path: filepath.Join(t.TempDir(), "gone.container")}}, t.TempDir())[0]
+	unit := Load([]podman.Quadlet{{Name: "gone.container", Path: filepath.Join(t.TempDir(), "gone.container")}}, nil)[0]
 
 	if unit.Name != "gone.container" || unit.Last("Image") != "" || unit.All("Volume") != nil && len(unit.All("Volume")) != 0 {
 		t.Errorf("got %+v, want an empty unit", unit)
