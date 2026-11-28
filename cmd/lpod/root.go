@@ -41,7 +41,7 @@ func newRoot(stdout io.Writer) *cobra.Command {
 const jsonOnly = "lpod/json-only"
 
 // isPorted says whether lpod implements args in Go: "--version", or one of
-// root's commands. Anything else, such as "lpod stry status", goes to the
+// root's commands. Anything else, such as "lpod demo status", goes to the
 // bash script.
 func isPorted(root *cobra.Command, args []string) bool {
 	if len(args) == 0 {
