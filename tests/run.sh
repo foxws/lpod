@@ -294,6 +294,16 @@ check 'first(.containers[] | select(.name == "systemd-glance")) | .application =
 check 'first(.containers[] | select(.name == "scratch")) | .application == null and .unit == null'
 keeps_contract containers '.containers[0]'
 calls "$PODMAN_STATS" 1
+calls "$QUADLET_LIST" 1
+calls "$PODMAN_PS" 1
+
+test_case "pods"
+lpod pods --json
+keeps_contract pods '.pods[0]'
+calls "podman pod ps --format json" 1
+calls "$PODMAN_PS" 1
+calls "$QUADLET_LIST" 1
+calls "$PODMAN_STATS" 0
 
 test_case "container NAME inspect shows stats, and its actions don't"
 lpod container demo-app inspect --json
@@ -337,7 +347,7 @@ check '.container.created_at == null'
 lpod apps --json
 check 'first(.applications[] | select(.name == "demo")).since == "2026-11-18T11:06:40+00:00"'
 lpod pods --json
-check '.pods == [{"id": "555555555555", "name": "scratch-pod", "status": "degraded", "application": null, "quadlet": null, "unit": null, "containers": 1, "running": 0, "ports": ["127.0.0.1:9000->80/tcp"], "networks": ["podman"], "created_at": "2026-11-17T10:00:00Z"}]'
+check '.pods == [{"id": "555555555555", "name": "scratch-pod", "status": "degraded", "application": null, "quadlet": null, "unit": null, "containers": 1, "running": 0, "ports": ["127.0.0.1:9000->80/tcp"], "networks": ["podman"], "created_at": "2026-11-17T10:00:00+00:00"}]'
 
 test_case "journal and events"
 lpod journal --json

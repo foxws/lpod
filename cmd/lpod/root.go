@@ -30,7 +30,8 @@ func newRoot(stdout io.Writer) *cobra.Command {
 
 	root.SetOut(stdout)
 	root.SetVersionTemplate("lpod {{.Version}}\n")
-	root.AddCommand(newVersion(), newHost(), newImages(), newAutoUpdate())
+	root.AddCommand(newVersion(), newHost(), newAutoUpdate())
+	root.AddCommand(newListings()...)
 
 	return root
 }

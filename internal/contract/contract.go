@@ -122,6 +122,68 @@ type Image struct {
 	Update *string `json:"update"`
 }
 
+// Containers is what "lpod containers --json" prints (containers.json).
+type Containers struct {
+	Contract   int         `json:"contract"`
+	Containers []Container `json:"containers"`
+}
+
+// Container is a container on the host, managed by Quadlet or not. A pod's
+// infra container isn't one.
+type Container struct {
+	// ID is the short ID, its first 12 characters.
+	ID    string `json:"id"`
+	Name  string `json:"name"`
+	Image string `json:"image"`
+	// State is such as "running", "exited" or "created".
+	State string `json:"state"`
+	// Health is "healthy", "unhealthy" or "starting", or null without a
+	// health check.
+	Health *string `json:"health"`
+	// ExitCode is null unless the container exited.
+	ExitCode *int `json:"exit_code"`
+	// Application, Quadlet and Unit are null for a container Quadlet
+	// doesn't run.
+	Application *string `json:"application"`
+	Quadlet     *string `json:"quadlet"`
+	Unit        *string `json:"unit"`
+	Pod         *string `json:"pod"`
+	// Ports are the published ports, such as "0.0.0.0:8000->8080/tcp".
+	Ports []string `json:"ports"`
+	// CPU is a percentage of one core, and Memory is in bytes. Both are
+	// null unless the container runs.
+	CPU       *float64 `json:"cpu"`
+	Memory    *uint64  `json:"memory"`
+	StartedAt Time     `json:"started_at"`
+}
+
+// Pods is what "lpod pods --json" prints (pods.json).
+type Pods struct {
+	Contract int   `json:"contract"`
+	Pods     []Pod `json:"pods"`
+}
+
+// Pod is a pod on the host.
+type Pod struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	// Status is such as "running", "degraded" or "exited".
+	Status string `json:"status"`
+	// Application, Quadlet and Unit are null for a pod Quadlet doesn't
+	// run. A .kube Quadlet's pods are its own.
+	Application *string `json:"application"`
+	Quadlet     *string `json:"quadlet"`
+	Unit        *string `json:"unit"`
+	// Containers counts its containers, without the infra container, and
+	// Running the ones that run.
+	Containers int `json:"containers"`
+	Running    int `json:"running"`
+	// Ports are what its infra container publishes.
+	Ports     []string `json:"ports"`
+	Networks  []string `json:"networks"`
+	CreatedAt Time     `json:"created_at"`
+}
+
 // OK is what a --json command that only changes something prints.
 type OK struct {
 	Contract int  `json:"contract"`
@@ -150,6 +212,27 @@ func (t Time) MarshalJSON() ([]byte, error) {
 	}
 
 	return json.Marshal(t.UTC().Format(TimeLayout))
+}
+
+// ParseTime reads a time Podman prints, such as
+// "2026-11-17T10:00:00.123456789Z". Podman's zero time ("0001-01-01…") and
+// one it can't read are the zero Time, which is null.
+func ParseTime(s string) Time {
+	parsed, err := time.Parse(time.RFC3339Nano, s)
+	if err != nil {
+		return Time{}
+	}
+
+	return Time{Time: parsed}
+}
+
+// Unix is seconds since the epoch as a Time, or null for 0.
+func Unix(seconds int64) Time {
+	if seconds <= 0 {
+		return Time{}
+	}
+
+	return Time{Time: time.Unix(seconds, 0)}
 }
 
 // String returns s as a JSON string, or null when it's empty.

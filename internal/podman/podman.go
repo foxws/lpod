@@ -3,10 +3,14 @@
 package podman
 
 import (
+	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"path"
+	"strconv"
 	"strings"
 
 	"github.com/foxws/lpod/internal/runner"
@@ -55,6 +59,69 @@ type Container struct {
 	Labels map[string]string `json:"Labels"`
 	// IsInfra is a pod's infra container, which holds its namespaces.
 	IsInfra bool `json:"IsInfra"`
+	// Image is the reference the container was created from.
+	Image string `json:"Image"`
+	// Status is for people, such as "Up 2 hours (healthy)".
+	Status   string `json:"Status"`
+	ExitCode int    `json:"ExitCode"`
+	// StartedAt is in seconds since the epoch, or 0.
+	StartedAt int64 `json:"StartedAt"`
+	// Pod is the ID of the container's pod, and PodName its name.
+	Pod     string `json:"Pod"`
+	PodName string `json:"PodName"`
+	Ports   []Port `json:"Ports"`
+}
+
+// Port is a port a container publishes on the host.
+type Port struct {
+	HostIP        string `json:"host_ip"`
+	HostPort      int    `json:"host_port"`
+	ContainerPort int    `json:"container_port"`
+	Protocol      string `json:"protocol"`
+	// Range is the number of ports from HostPort and ContainerPort on, 1
+	// for one.
+	Range int `json:"range"`
+}
+
+// String writes the port as the contract does, such as
+// "0.0.0.0:8000->8080/tcp", or "0.0.0.0:8000-8009->8080-8089/tcp" for a
+// range.
+func (p Port) String() string {
+	ip := cmp.Or(p.HostIP, "0.0.0.0")
+	host, container := strconv.Itoa(p.HostPort), strconv.Itoa(p.ContainerPort)
+
+	if p.Range > 1 {
+		host += "-" + strconv.Itoa(p.HostPort+p.Range-1)
+		container += "-" + strconv.Itoa(p.ContainerPort+p.Range-1)
+	}
+
+	return net.JoinHostPort(ip, host) + "->" + container + "/" + cmp.Or(p.Protocol, "tcp")
+}
+
+// Pod is a pod in "podman pod ps".
+type Pod struct {
+	ID   string `json:"Id"`
+	Name string `json:"Name"`
+	// Status is such as "Running", "Degraded" or "Exited".
+	Status string `json:"Status"`
+	// Created is a time such as "2026-11-17T10:00:00.123456789Z".
+	Created  string            `json:"Created"`
+	Labels   map[string]string `json:"Labels"`
+	Networks []string          `json:"Networks"`
+}
+
+// Unit is the systemd unit Quadlet runs the pod with, or "".
+func (p Pod) Unit() string {
+	return p.Labels["PODMAN_SYSTEMD_UNIT"]
+}
+
+// Stat is the CPU and memory a running container uses, from "podman stats".
+type Stat struct {
+	Name string `json:"Name"`
+	// CPU is a percentage of one core.
+	CPU float64 `json:"CPU"`
+	// MemUsage is in bytes.
+	MemUsage uint64 `json:"MemUsage"`
 }
 
 // Unit is the systemd unit Quadlet runs the container with, or "".
@@ -143,6 +210,48 @@ func (c Client) Containers(ctx context.Context) ([]Container, error) {
 	var containers []Container
 
 	return containers, c.json(ctx, &containers, "ps", "--all", "--format", "json")
+}
+
+// Pods runs "podman pod ps".
+func (c Client) Pods(ctx context.Context) ([]Pod, error) {
+	var pods []Pod
+
+	return pods, c.json(ctx, &pods, "pod", "ps", "--format", "json")
+}
+
+// Stats runs "podman stats" once, for the running containers. It's slow,
+// since it reads each container's cgroup, so only call it where the CPU or
+// memory is shown.
+func (c Client) Stats(ctx context.Context) ([]Stat, error) {
+	out, err := c.Run(ctx, c.Binary, "stats", "--no-stream", "--format", "{{json .}}")
+	if err != nil {
+		return nil, err
+	}
+
+	// It prints a JSON object per line...
+	var stats []Stat
+	decoder := json.NewDecoder(bytes.NewReader(out))
+
+	for decoder.More() {
+		var stat Stat
+		if err := decoder.Decode(&stat); err != nil {
+			return nil, fmt.Errorf("can't read podman stats: %w", err)
+		}
+
+		stats = append(stats, stat)
+	}
+
+	return stats, nil
+}
+
+// ByUnit returns quadlets by the unit each one generates.
+func ByUnit(quadlets []Quadlet) map[string]Quadlet {
+	units := make(map[string]Quadlet, len(quadlets))
+	for _, quadlet := range quadlets {
+		units[quadlet.UnitName] = quadlet
+	}
+
+	return units
 }
 
 // Images runs "podman images --all", which includes the intermediate images

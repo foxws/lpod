@@ -4035,7 +4035,7 @@ function cmd_pods_json {
                 running: ($containers | map(select(.State == "running")) | length),
                 ports: ($infra.Ports | published_ports),
                 networks: (.Networks // []),
-                created_at: (.Created | podman_time)
+                created_at: (.Created | podman_time | if . == null then null else sub("Z$"; "+00:00") end)
             })
         | sort_by(.application == null, .application, .name)
         | {contract: $contract, pods: .}'
