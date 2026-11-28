@@ -290,6 +290,32 @@ type Event struct {
 	ExitCode *int `json:"exit_code"`
 }
 
+// HostSettings is what "lpod settings --json" prints (host-settings.json).
+type HostSettings struct {
+	Contract int      `json:"contract"`
+	Settings Settings `json:"settings"`
+}
+
+// Settings are the host's settings "lpod settings set" changes.
+type Settings struct {
+	AutoUpdate AutoUpdateSettings `json:"auto_update"`
+	// Linger is null as root, where it doesn't apply.
+	Linger *bool `json:"linger"`
+	// QuadletDir has the home directory written as "~".
+	QuadletDir string `json:"quadlet_dir"`
+}
+
+// AutoUpdateSettings are podman-auto-update.timer's.
+type AutoUpdateSettings struct {
+	Enabled bool `json:"enabled"`
+	// Schedule is the timer's OnCalendar=, such as "daily".
+	Schedule string `json:"schedule"`
+	// Rollback says whether a failed update goes back to the image before.
+	Rollback bool `json:"rollback"`
+	NextRun  Time `json:"next_run"`
+	LastRun  Time `json:"last_run"`
+}
+
 // OK is what a --json command that only changes something prints.
 type OK struct {
 	Contract int  `json:"contract"`

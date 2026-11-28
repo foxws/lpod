@@ -408,6 +408,13 @@ calls_like "^(podman events|journalctl)" 2
 test_case "systemd timers"
 lpod settings --json
 check '.settings.auto_update == {"enabled": true, "schedule": "*-*-* 03:00:00", "rollback": true, "next_run": "2026-11-18T12:06:40+00:00", "last_run": null}'
+keeps_contract host-settings '.settings.auto_update'
+lpod settings set --rollback off --json && check '.ok'
+lpod settings --json
+check '.settings.auto_update.rollback == false'
+lpod settings set --rollback on --json && check '.ok'
+lpod settings --json
+check '.settings.auto_update.rollback'
 lpod demo timers --json
 check '.timers[0] | .name == "backup" and .enabled and .running and .next_run == "2026-11-18T12:06:40+00:00" and .last_run == "2026-11-18T08:20:00+00:00" and .last_result == null'
 lpod host --json
