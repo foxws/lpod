@@ -185,6 +185,19 @@ PODMAN_STATS="podman stats --no-stream --format {{json .}}"
 PODMAN_PS="podman ps --all --format json"
 QUADLET_LIST="podman quadlet list --format json"
 
+test_case "--version prints lpod's version"
+for ARGS in --version -v version; do
+    lpod "$ARGS" && holds "lpod ${ARGS} printed ${OUTPUT}" test "$OUTPUT" == "lpod dev"
+done
+
+test_case "version --json reads the versions of the host"
+lpod version --json
+check '.contract == 1 and .lpod == "dev" and .podman == "6.2.0" and .systemd == "258"'
+check '.scope == "rootless" and .user != "" and .hostname != ""'
+keeps_contract version '.'
+calls "podman version --format {{.Client.Version}}" 1
+calls "systemctl --version" 1
+
 test_case "auto-update --dry-run keeps the image each pending container runs"
 lpod auto-update --dry-run --json && check '.ok'
 OUTPUT="$(cat "${XDG_CACHE_HOME}/lpod/auto-update.json")"
