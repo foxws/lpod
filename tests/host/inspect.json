@@ -1,7 +1,7 @@
 [
   {
     "Id": "1111111111111111111111111111111111111111111111111111111111111111",
-    "Name": "stry-app",
+    "Name": "demo-app",
     "Image": "c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3",
     "Created": "2026-11-26T10:00:00.123Z",
     "RestartCount": 0,
@@ -9,7 +9,7 @@
       "User": "",
       "Labels": {
         "io.containers.autoupdate": "registry",
-        "PODMAN_SYSTEMD_UNIT": "stry-app.service"
+        "PODMAN_SYSTEMD_UNIT": "demo-app.service"
       }
     },
     "HostConfig": {
@@ -18,8 +18,8 @@
     "Mounts": [
       {
         "Type": "volume",
-        "Name": "stry-data",
-        "Source": "/volumes/stry-data/_data"
+        "Name": "demo-data",
+        "Source": "/volumes/demo-data/_data"
       },
       {
         "Type": "bind",
@@ -28,13 +28,13 @@
     ],
     "NetworkSettings": {
       "Networks": {
-        "stry": {}
+        "demo": {}
       }
     }
   },
   {
     "Id": "2222222222222222222222222222222222222222222222222222222222222222",
-    "Name": "stry-valkey",
+    "Name": "demo-valkey",
     "Image": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
     "Created": "2026-11-26T10:00:00Z",
     "RestartCount": 0,
@@ -42,7 +42,7 @@
       "User": "",
       "Labels": {
         "io.containers.autoupdate": "registry",
-        "PODMAN_SYSTEMD_UNIT": "stry-valkey.service"
+        "PODMAN_SYSTEMD_UNIT": "demo-valkey.service"
       }
     },
     "HostConfig": {
@@ -57,7 +57,7 @@
     ],
     "NetworkSettings": {
       "Networks": {
-        "stry": {}
+        "demo": {}
       }
     }
   },

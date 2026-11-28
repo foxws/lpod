@@ -1,5 +1,5 @@
 [Container]
 Image=docker.io/library/valkey:9
-ContainerName=stry-valkey
-Network=stry.network
+ContainerName=demo-valkey
+Network=demo.network
 AutoUpdate=registry

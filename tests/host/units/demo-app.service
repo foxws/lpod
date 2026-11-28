@@ -1,4 +1,4 @@
-Id=stry-app.service
+Id=demo-app.service
 ActiveState=active
 SubState=running
 Result=success
