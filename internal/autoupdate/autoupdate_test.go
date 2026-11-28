@@ -53,8 +53,8 @@ func TestDryRunKeepsTheImageOfEachPendingContainer(t *testing.T) {
 	var calls []string
 	file := filepath.Join(t.TempDir(), "lpod", "auto-update.json")
 	client := fakePodman(`[
-		{"Unit": "stry-app.service", "ContainerID": "1111", "Updated": "false"},
-		{"Unit": "stry-valkey.service", "ContainerID": "2222", "Updated": "pending"},
+		{"Unit": "demo-app.service", "ContainerID": "1111", "Updated": "false"},
+		{"Unit": "demo-valkey.service", "ContainerID": "2222", "Updated": "pending"},
 		{"Unit": "gone.service", "ContainerID": "9999", "Updated": "pending"}
 	]`, &calls)
 
@@ -76,7 +76,7 @@ func TestDryRunKeepsTheImageOfEachPendingContainer(t *testing.T) {
 		t.Errorf("got %v", entries)
 	}
 
-	if entries[1]["Unit"] != "stry-valkey.service" {
+	if entries[1]["Unit"] != "demo-valkey.service" {
 		t.Errorf("got %v, want Podman's keys kept", entries[1])
 	}
 

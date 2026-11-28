@@ -1,2 +1,2 @@
-{"Name": "stry-app", "CPU": 2.5, "MemUsage": 300000000}
-{"Name": "stry-valkey", "CPU": 0.5, "MemUsage": 20000000}
+{"Name": "demo-app", "CPU": 2.5, "MemUsage": 300000000}
+{"Name": "demo-valkey", "CPU": 0.5, "MemUsage": 20000000}

@@ -1,4 +1,4 @@
-Id=stry-valkey.service
+Id=demo-valkey.service
 ActiveState=active
 SubState=running
 Result=success

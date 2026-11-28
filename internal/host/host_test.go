@@ -19,11 +19,11 @@ var answers = map[string]string{
 	"podman info --format json":     `{"host": {"networkBackend": "netavark"}, "store": {"graphRoot": "/home/blue/.local/share/containers/storage", "graphDriverName": "overlay"}}`,
 	"podman ps --all --format json": `[{"State": "running"}, {"State": "exited"}, {"State": "running"}]`,
 	"podman quadlet list --format json": `[
-		{"Name": "stry-app.container", "UnitName": "stry-app.service", "App": "stry"},
-		{"Name": "stry-data.volume", "UnitName": "stry-data-volume.service", "App": "stry"},
+		{"Name": "demo-app.container", "UnitName": "demo-app.service", "App": "demo"},
+		{"Name": "demo-data.volume", "UnitName": "demo-data-volume.service", "App": "demo"},
 		{"Name": "glance.container", "UnitName": "glance.service"}
 	]`,
-	"systemctl --user show --property=Id,ActiveState,NextElapseUSecRealtime --timestamp=unix -- podman-auto-update.timer stry-app.service glance.service": "Id=podman-auto-update.timer\nActiveState=active\nNextElapseUSecRealtime=@1795003600\n\nId=stry-app.service\nActiveState=active\n\nId=glance.service\nActiveState=failed\n",
+	"systemctl --user show --property=Id,ActiveState,NextElapseUSecRealtime --timestamp=unix -- podman-auto-update.timer demo-app.service glance.service": "Id=podman-auto-update.timer\nActiveState=active\nNextElapseUSecRealtime=@1795003600\n\nId=demo-app.service\nActiveState=active\n\nId=glance.service\nActiveState=failed\n",
 	"loginctl show-user --property=Linger --value -- blue": "yes\n",
 }
 

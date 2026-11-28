@@ -1,5 +1,5 @@
 [
-    {"Id": "c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3", "Names": ["ghcr.io/francoism90/stry:4"], "Size": 2000000000, "Created": 1795000000, "Containers": 1},
+    {"Id": "c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3", "Names": ["ghcr.io/example/demo:4"], "Size": 2000000000, "Created": 1795000000, "Containers": 1},
     {"Id": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1", "Names": ["docker.io/library/valkey:9"], "Size": 118000000, "Created": 1795000000, "Containers": 2},
     {"Id": "d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4", "Names": ["docker.io/glanceapp/glance:latest"], "Size": 23000000, "Created": 1795000000, "Containers": 1}
 ]

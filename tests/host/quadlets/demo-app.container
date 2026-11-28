@@ -1,0 +1,8 @@
+[Container]
+Image=ghcr.io/example/demo:4
+ContainerName=demo-app
+PublishPort=8000:8080
+Volume=demo-data.volume:/data
+Network=demo.network
+AutoUpdate=registry
+Label=io.foxws.pods.url=https://demo.test

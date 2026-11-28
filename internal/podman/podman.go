@@ -87,9 +87,9 @@ type Update struct {
 
 // Quadlet is an installed Quadlet in "podman quadlet list".
 type Quadlet struct {
-	// Name is the file name, such as "stry-app.container".
+	// Name is the file name, such as "demo-app.container".
 	Name string `json:"Name"`
-	// UnitName is the service Quadlet generates, such as "stry-app.service".
+	// UnitName is the service Quadlet generates, such as "demo-app.service".
 	// ServiceName= sets it, so it comes from the file's author: pass it to
 	// systemctl after "--".
 	UnitName string `json:"UnitName"`
@@ -105,7 +105,7 @@ func (q Quadlet) Ext() string {
 	return strings.TrimPrefix(path.Ext(q.Name), ".")
 }
 
-// Base is the name without its extension, such as "stry-app".
+// Base is the name without its extension, such as "demo-app".
 func (q Quadlet) Base() string {
 	return strings.TrimSuffix(q.Name, path.Ext(q.Name))
 }
