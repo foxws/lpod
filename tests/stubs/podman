@@ -126,6 +126,8 @@ case "$*" in
         '{host: {networkBackend: "netavark"}, store: {graphRoot: $root, graphDriverName: $driver}}' ;;
     "info --format "*) printf '%s\t%s\t%s\n' "${HOST}/storage" "$(cat "$HOST/storage-driver")" netavark ;;
     "quadlet --help") echo "Manage Quadlets" ;;
+    # Runs the command here, as the test's user owns the volumes' files...
+    "unshare "*) shift; "$@" ;;
     "version --format "*) echo "6.2.0" ;;
     "pull --quiet "*missing*) echo "Error: initializing source docker://${*: -1}: manifest unknown" >&2; exit 125 ;;
     "start "*|"stop "*|"restart "*) echo "$2" ;;
