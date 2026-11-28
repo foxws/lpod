@@ -19,4 +19,5 @@ The release binaries include the Go modules in [go.mod](go.mod). Each module's l
 | --- | --- |
 | [github.com/spf13/cobra](https://github.com/spf13/cobra) | Apache-2.0 |
 | [github.com/spf13/pflag](https://github.com/spf13/pflag) | BSD-3-Clause |
+| [go.podman.io/podman/v6](https://github.com/containers/podman), only `pkg/systemd/parser` | Apache-2.0 |
 | [github.com/inconshreveable/mousetrap](https://github.com/inconshreveable/mousetrap) | Apache-2.0, only in Windows builds, so not in lpod's |

@@ -10,7 +10,6 @@ import (
 	"math"
 	"os"
 	"os/user"
-	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
@@ -20,6 +19,7 @@ import (
 
 	"github.com/foxws/lpod/internal/contract"
 	"github.com/foxws/lpod/internal/podman"
+	"github.com/foxws/lpod/internal/quadlet"
 	"github.com/foxws/lpod/internal/systemd"
 )
 
@@ -171,7 +171,7 @@ func system(ctx context.Context, m Machine) contract.HostSystem {
 		OS:         contract.String(osName(m.Root)),
 		Kernel:     contract.String(strings.TrimSpace(string(kernel))),
 		BootedAt:   contract.Time{Time: bootedAt(m.Root)},
-		QuadletDir: homePath(QuadletDir(m.Rootful, m.Getenv), m.Getenv("HOME")),
+		QuadletDir: homePath(quadlet.Dir(m.Rootful, m.Getenv), m.Getenv("HOME")),
 	}
 
 	if !m.Rootful {
@@ -183,22 +183,6 @@ func system(ctx context.Context, m Machine) contract.HostSystem {
 	}
 
 	return described
-}
-
-// QuadletDir is where Quadlet looks for the units "podman quadlet install"
-// installs, and their drop-ins.
-func QuadletDir(rootful bool, getenv func(string) string) string {
-	if rootful {
-		return "/etc/containers/systemd"
-	}
-
-	// The XDG spec says to ignore a relative XDG_CONFIG_HOME...
-	config := getenv("XDG_CONFIG_HOME")
-	if !filepath.IsAbs(config) {
-		config = filepath.Join(getenv("HOME"), ".config")
-	}
-
-	return filepath.Join(config, "containers", "systemd")
 }
 
 // homePath writes path with the home directory as "~".

@@ -178,29 +178,6 @@ func TestCPUUsageWithoutProcStat(t *testing.T) {
 	}
 }
 
-func TestQuadletDir(t *testing.T) {
-	env := func(vars map[string]string) func(string) string {
-		return func(name string) string { return vars[name] }
-	}
-
-	cases := []struct {
-		rootful bool
-		vars    map[string]string
-		want    string
-	}{
-		{true, nil, "/etc/containers/systemd"},
-		{false, map[string]string{"HOME": "/home/blue"}, "/home/blue/.config/containers/systemd"},
-		{false, map[string]string{"HOME": "/home/blue", "XDG_CONFIG_HOME": "/srv/config"}, "/srv/config/containers/systemd"},
-		{false, map[string]string{"HOME": "/home/blue", "XDG_CONFIG_HOME": "config"}, "/home/blue/.config/containers/systemd"},
-	}
-
-	for _, c := range cases {
-		if got := QuadletDir(c.rootful, env(c.vars)); got != c.want {
-			t.Errorf("QuadletDir(%v, %v) = %s, want %s", c.rootful, c.vars, got, c.want)
-		}
-	}
-}
-
 func TestHomePath(t *testing.T) {
 	cases := map[string]string{
 		"/home/blue/.config":  "~/.config",

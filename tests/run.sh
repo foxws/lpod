@@ -287,6 +287,18 @@ calls "$QUADLET_LIST" 1
 calls "$PODMAN_PS" 1
 calls "$PODMAN_STATS" 0
 
+# What lpod in Go reads with Podman's parser, which the bash script reads
+# wrong. The bash script stays for branch installs until it's removed...
+if [ -n "${LPOD_UNDER_TEST:-}" ]; then
+    test_case "Quadlets are read like Quadlet reads them, with their drop-ins"
+    printf '[Network]\nNetworkName = demo\n' > "${LPOD_TEST_HOST}/quadlets/demo.network"
+    mkdir -p "${LPOD_TEST_HOST}/quadlets/container.d"
+    printf '[Container]\nNetwork=podman\n' > "${LPOD_TEST_HOST}/quadlets/container.d/lpod-test.conf"
+    lpod networks --json
+    check 'first(.networks[] | select(.name == "demo")).quadlet == "demo.network"'
+    check 'first(.networks[] | select(.name == "podman")).applications == ["demo", "glance"]'
+fi
+
 test_case "containers"
 lpod containers --json
 check 'first(.containers[] | select(.name == "demo-app")) | .application == "demo" and .cpu == 2.5 and .memory == 300000000 and .health == "healthy"'
