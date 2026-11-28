@@ -44,7 +44,18 @@ func newListing(name, short string, list func(context.Context, podman.Client) (a
 
 // newListings returns the listings lpod answers in Go.
 func newListings() []*cobra.Command {
+	volumesListing := newListing("volumes", "List the volumes, and the folders containers mount", func(ctx context.Context, client podman.Client) (any, error) {
+		return volumes.List(ctx, client, quadlet.SearchDirs(rootful()))
+	})
+
+	// "lpod volumes sizes --json" walks every file of every volume, so it's
+	// a command of its own rather than part of the listing...
+	volumesListing.AddCommand(newListing("sizes", "Measure the disk space of each volume", func(ctx context.Context, client podman.Client) (any, error) {
+		return volumes.Sizes(ctx, client, rootful())
+	}))
+
 	return []*cobra.Command{
+		volumesListing,
 		newListing("images", "List the images, what uses them, and their updates", func(ctx context.Context, client podman.Client) (any, error) {
 			return images.List(ctx, client, autoupdate.CacheFile(os.Getenv))
 		}),
@@ -53,9 +64,6 @@ func newListings() []*cobra.Command {
 		}),
 		newListing("pods", "List the pods, with their applications and containers", func(ctx context.Context, client podman.Client) (any, error) {
 			return pods.List(ctx, client)
-		}),
-		newListing("volumes", "List the volumes, and the folders containers mount", func(ctx context.Context, client podman.Client) (any, error) {
-			return volumes.List(ctx, client, quadlet.SearchDirs(rootful()))
 		}),
 		newListing("networks", "List the networks, with what uses them", func(ctx context.Context, client podman.Client) (any, error) {
 			return networks.List(ctx, client, quadlet.SearchDirs(rootful()))

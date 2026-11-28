@@ -278,6 +278,22 @@ calls "$QUADLET_LIST" 1
 calls "$PODMAN_PS" 1
 calls "$PODMAN_STATS" 0
 
+test_case "volumes sizes measures the local volumes with du, in the user's namespace"
+mkdir -p "${LPOD_TEST_HOST}/volumes/demo-data/_data" "${LPOD_TEST_HOST}/volumes/f00dcafe/_data"
+head -c 1048576 /dev/urandom > "${LPOD_TEST_HOST}/volumes/demo-data/_data/blob"
+jq --arg root "${LPOD_TEST_HOST}" 'map(.Mountpoint = $root + .Mountpoint) + [
+    {Name: "media", Driver: "local", Mountpoint: ($root + "/volumes/media/_data"), Options: {type: "nfs", device: "nas:/media"}, Anonymous: false},
+    {Name: "gone", Driver: "local", Mountpoint: ($root + "/volumes/gone/_data"), Options: {}, Anonymous: false}
+]' "${LPOD_TEST_HOST}/volumes.json" > "${WORK}/volumes.json" && mv "${WORK}/volumes.json" "${LPOD_TEST_HOST}/volumes.json"
+lpod volumes sizes --json
+check '[.sizes[].name] == ["demo-data", "f00dcafe", "gone"]'
+check '(.sizes[0].size >= 1048576) and (.sizes[1].size < .sizes[0].size) and .sizes[2].size == null'
+keeps_contract volume-sizes '.sizes[0]'
+
+if [ "$(id -u)" -ne 0 ]; then
+    calls_like "^podman unshare du -s --block-size=1 -- " 1
+fi
+
 test_case "networks"
 lpod networks --json
 check 'first(.networks[] | select(.name == "demo")) | .quadlet == "demo.network" and .applications == ["demo"] and .containers == 2'

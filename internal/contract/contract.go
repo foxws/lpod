@@ -211,6 +211,19 @@ type Volume struct {
 	Applications []string `json:"applications"`
 }
 
+// VolumeSizes is what "lpod volumes sizes --json" prints (volume-sizes.json).
+type VolumeSizes struct {
+	Contract int          `json:"contract"`
+	Sizes    []VolumeSize `json:"sizes"`
+}
+
+// VolumeSize is the disk space a volume uses, in bytes, or null when du
+// couldn't measure it.
+type VolumeSize struct {
+	Name string `json:"name"`
+	Size *int64 `json:"size"`
+}
+
 // Networks is what "lpod networks --json" prints (networks.json).
 type Networks struct {
 	Contract int       `json:"contract"`
