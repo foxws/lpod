@@ -95,6 +95,44 @@ type HostUnits struct {
 	Failed int `json:"failed"`
 }
 
+// Images is what "lpod images --json" prints (images.json).
+type Images struct {
+	Contract int     `json:"contract"`
+	Images   []Image `json:"images"`
+}
+
+// Image is an image on the host, with what uses it.
+type Image struct {
+	// ID is the short ID, its first 12 characters.
+	ID string `json:"id"`
+	// Repository and Tag are null for a dangling image, which has no name.
+	Repository *string `json:"repository"`
+	Tag        *string `json:"tag"`
+	Size       *int64  `json:"size"`
+	CreatedAt  Time    `json:"created_at"`
+	// UsedBy is the applications whose containers run it.
+	UsedBy []string `json:"used_by"`
+	// Containers counts every container that runs it.
+	Containers int  `json:"containers"`
+	Dangling   bool `json:"dangling"`
+	// AutoUpdate is the AutoUpdate= policy of a container that runs it.
+	AutoUpdate *string `json:"auto_update"`
+	// Update is the tag the registry has a newer image for, from the last
+	// "lpod auto-update --dry-run".
+	Update *string `json:"update"`
+}
+
+// OK is what a --json command that only changes something prints.
+type OK struct {
+	Contract int  `json:"contract"`
+	OK       bool `json:"ok"`
+}
+
+// Done is the OK payload of the current contract.
+func Done() OK {
+	return OK{Contract: Current, OK: true}
+}
+
 // Time is a time in the contract, such as "2026-11-15T15:00:00+00:00",
 // always in UTC and without a fraction of a second. The zero Time is null.
 type Time struct {

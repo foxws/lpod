@@ -4,6 +4,7 @@ import (
 	"io"
 	"os"
 	"slices"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -29,10 +30,15 @@ func newRoot(stdout io.Writer) *cobra.Command {
 
 	root.SetOut(stdout)
 	root.SetVersionTemplate("lpod {{.Version}}\n")
-	root.AddCommand(newVersion(), newHost())
+	root.AddCommand(newVersion(), newHost(), newImages(), newAutoUpdate())
 
 	return root
 }
+
+// jsonOnly marks a command that only answers with --json, such as
+// "lpod images --json". Without --json, the same word is free as the name of
+// an application or service, as in "lpod images status".
+const jsonOnly = "lpod/json-only"
 
 // isPorted says whether lpod implements args in Go: "--version", or one of
 // root's commands. Anything else, such as "lpod stry status", goes to the
@@ -46,9 +52,25 @@ func isPorted(root *cobra.Command, args []string) bool {
 		return true
 	}
 
-	command, _, err := root.Find(args)
+	command, rest, err := root.Find(args)
+	if err != nil || command == root {
+		return false
+	}
 
-	return err == nil && command != root
+	if command.Annotations[jsonOnly] == "" {
+		return true
+	}
+
+	// A word after a --json listing is an application named like it, as in
+	// "lpod images status --json", or one of its subcommands that's still
+	// the bash script's, such as "lpod images prune --json"...
+	for _, arg := range rest {
+		if !strings.HasPrefix(arg, "-") {
+			return false
+		}
+	}
+
+	return slices.Contains(rest, "--json")
 }
 
 // rootful says whether lpod runs as root, which manages the system's

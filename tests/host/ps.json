@@ -5,12 +5,14 @@
       "stry-app"
     ],
     "Image": "ghcr.io/francoism90/stry:4",
+    "ImageID": "c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3",
     "State": "running",
     "Status": "Up 2 hours (healthy)",
     "ExitCode": 0,
     "StartedAt": 1795000000,
     "Labels": {
-      "PODMAN_SYSTEMD_UNIT": "stry-app.service"
+      "PODMAN_SYSTEMD_UNIT": "stry-app.service",
+      "io.containers.autoupdate": "registry"
     },
     "Ports": [
       {
@@ -27,12 +29,14 @@
       "stry-valkey"
     ],
     "Image": "docker.io/library/valkey:9",
+    "ImageID": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
     "State": "running",
     "Status": "Up 2 hours",
     "ExitCode": 0,
     "StartedAt": 1795000000,
     "Labels": {
-      "PODMAN_SYSTEMD_UNIT": "stry-valkey.service"
+      "PODMAN_SYSTEMD_UNIT": "stry-valkey.service",
+      "io.containers.autoupdate": "registry"
     }
   },
   {
@@ -41,6 +45,7 @@
       "systemd-glance"
     ],
     "Image": "docker.io/glanceapp/glance:latest",
+    "ImageID": "d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4",
     "State": "exited",
     "Status": "Exited (1) 5 minutes ago",
     "ExitCode": 1,
@@ -55,6 +60,7 @@
       "scratch"
     ],
     "Image": "docker.io/library/valkey:9",
+    "ImageID": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
     "State": "exited",
     "Status": "Exited (0) 1 day ago",
     "ExitCode": 0,
@@ -69,6 +75,7 @@
       "5555-infra"
     ],
     "Image": "localhost/podman-pause:6.2.0",
+    "ImageID": "e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5",
     "State": "running",
     "Status": "Up 1 day",
     "ExitCode": 0,

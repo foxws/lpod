@@ -229,6 +229,20 @@ check "first(.[] | select(.ContainerName == \"stry-valkey\")).ImageID == \"${OLD
 check 'first(.[] | select(.ContainerName == "gone")).ImageID == null'
 check 'first(.[] | select(.ContainerName == "stry-app")).ImageID == null'
 
+test_case "auto-update only does a dry run"
+lpod_status auto-update --json
+exited_with 1
+said "Usage: lpod auto-update --dry-run --json"
+calls_like "^podman auto-update" 0
+lpod auto-update --dry-run --json
+keeps_contract ok '.'
+
+test_case "an application named like a listing still gets its commands"
+add_quadlet images.container "" $'[Container]\nImage=docker.io/library/alpine:3'
+lpod images status --json
+check '.application.name == "images"'
+calls_like "^podman images" 0
+
 test_case "images shows an update until the image is pulled"
 lpod auto-update --dry-run --json
 lpod images --json
@@ -248,6 +262,7 @@ check '[.images[] | select(.update != null)] == []'
 
 test_case "images reads the host once, without stats"
 lpod images --json
+calls_like "^podman images" 1
 calls "$QUADLET_LIST" 1
 calls "$PODMAN_PS" 1
 calls "podman ps --all --quiet" 0

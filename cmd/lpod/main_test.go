@@ -48,6 +48,13 @@ func TestIsPorted(t *testing.T) {
 		{[]string{"--json", "version"}, false},
 		{[]string{"hosts"}, false},
 		{[]string{"stry", "host"}, false},
+		{[]string{"images", "--json"}, true},
+		{[]string{"images"}, false},
+		{[]string{"images", "status", "--json"}, false},
+		{[]string{"images", "prune", "--json"}, false},
+		{[]string{"auto-update", "--dry-run", "--json"}, true},
+		{[]string{"auto-update", "--json"}, true},
+		{[]string{"auto-update", "--dry-run"}, false},
 	}
 
 	for _, c := range cases {
