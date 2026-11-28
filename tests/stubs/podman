@@ -117,6 +117,8 @@ case "$*" in
     "network ls --format json") cat "$HOST/networks.json" ;;
     "events --stream=false "*) cat "$HOST/events.jsonl" ;;
     "info --format {{.Store.GraphDriverName}}") cat "$HOST/storage-driver" ;;
+    "info --format json") jq -n --arg root "${HOST}/storage" --arg driver "$(cat "$HOST/storage-driver")" \
+        '{host: {networkBackend: "netavark"}, store: {graphRoot: $root, graphDriverName: $driver}}' ;;
     "info --format "*) printf '%s\t%s\t%s\n' "${HOST}/storage" "$(cat "$HOST/storage-driver")" netavark ;;
     "quadlet --help") echo "Manage Quadlets" ;;
     "version --format "*) echo "6.2.0" ;;

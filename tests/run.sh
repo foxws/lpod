@@ -198,6 +198,30 @@ keeps_contract version '.'
 calls "podman version --format {{.Client.Version}}" 1
 calls "systemctl --version" 1
 
+test_case "host reads the host once"
+mkdir -p "${LPOD_TEST_HOST}/storage"
+lpod host --json
+check '.contract == 1 and .cpu.cores > 0 and .memory.total > 0 and (.cpu.load | length) == 3'
+check ".disk.path == \"${LPOD_TEST_HOST}/storage\" and .disk.total > 0 and .disk.used <= .disk.total"
+check '.containers == {"running": 3, "total": 5}'
+check '.system | .storage_driver == "overlay" and .network_backend == "netavark" and .kernel != null'
+check ".system.quadlet_dir == \"${XDG_CONFIG_HOME}/containers/systemd\""
+keeps_contract host '.'
+calls_like "^podman info" 1
+calls_like "^podman ps" 1
+calls "$QUADLET_LIST" 1
+
+if [ "$(id -u)" -ne 0 ]; then
+    check '.system.linger == true'
+    calls_like "^loginctl show-user" 1
+fi
+
+test_case "host prints a summary for people"
+lpod host
+for LINE in "^CPU: .*% of [0-9]* cores$" "^Containers: 3 of 5 running$" "^Auto-update: next run 2026-11-18T12:06:40+00:00$"; do
+    holds "lpod host printed ${OUTPUT}" grep -q -- "$LINE" <<< "$OUTPUT"
+done
+
 test_case "auto-update --dry-run keeps the image each pending container runs"
 lpod auto-update --dry-run --json && check '.ok'
 OUTPUT="$(cat "${XDG_CACHE_HOME}/lpod/auto-update.json")"

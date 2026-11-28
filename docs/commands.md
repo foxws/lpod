@@ -237,7 +237,7 @@ Tools such as Pods manage a host by running these commands over SSH. With `--jso
 | --- | --- |
 | `lpod version --json` | `contract`, `lpod`, `podman`, `systemd`, `scope` (`rootless` or `rootful`), `user` and `hostname` |
 | `lpod apps [--json]` | `applications`: each installed application with its main unit, `kind`, `status`, `result`, `since`, `image`, `ports`, `memory`, `auto_update`, its `io.foxws.pods.*` labels, and the last `error` of a failed one |
-| `lpod host [--json]` | `cpu` (with the `load` averages), `memory` (with swap), `disk` (of Podman's graph root), `containers`, `auto_update` (the next `podman-auto-update.timer` run), `system` (`os`, `kernel`, `booted_at`, `storage_driver`, `network_backend`, `quadlet_dir` and `linger`, which is `null` as root) and the number of `active` and `failed` Quadlet `units` |
+| `lpod host [--json]` | `cpu` (with the `load` averages), `memory` (with swap), `disk` (of Podman's graph root, or of the home directory when Podman doesn't say), `containers`, `auto_update` (the next `podman-auto-update.timer` run), `system` (`os`, `kernel`, `booted_at`, `storage_driver`, `network_backend`, `quadlet_dir` and `linger`, which is `null` as root) and the number of `active` and `failed` Quadlet `units` |
 | `lpod secrets [--json]` | `secrets` with the applications whose Quadlets use them (`used_by`), and the `missing` ones that Quadlets use but don't exist |
 | `lpod secret create NAME --stdin [--driver file\|pass\|shell] [--replace] [--json]` | `{"ok": true}`. The value comes from stdin only, never the command line |
 | `lpod APP status --json` | `application`: what `apps` prints, plus its `path`, `volumes`, `secrets` and containers (`items`) with their CPU and memory use |

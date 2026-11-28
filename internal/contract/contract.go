@@ -6,6 +6,7 @@ package contract
 import (
 	"encoding/json"
 	"io"
+	"time"
 )
 
 // Current is the version of the contract the payloads follow. Tools refuse a
@@ -24,10 +25,109 @@ type Version struct {
 	Hostname string `json:"hostname"`
 }
 
+// Host is what "lpod host --json" prints (host.json): how busy the host is,
+// and what runs on it.
+type Host struct {
+	Contract   int            `json:"contract"`
+	CPU        HostCPU        `json:"cpu"`
+	Memory     HostMemory     `json:"memory"`
+	Disk       HostDisk       `json:"disk"`
+	Containers HostContainers `json:"containers"`
+	AutoUpdate HostAutoUpdate `json:"auto_update"`
+	System     HostSystem     `json:"system"`
+	Units      HostUnits      `json:"units"`
+}
+
+// HostCPU is the number of cores, the percentage of them in use, and the
+// load averages over 1, 5 and 15 minutes.
+type HostCPU struct {
+	Cores int        `json:"cores"`
+	Usage float64    `json:"usage"`
+	Load  [3]float64 `json:"load"`
+}
+
+// HostMemory is the memory and swap in use, in bytes.
+type HostMemory struct {
+	Used      uint64 `json:"used"`
+	Total     uint64 `json:"total"`
+	SwapUsed  uint64 `json:"swap_used"`
+	SwapTotal uint64 `json:"swap_total"`
+}
+
+// HostDisk is the space in use, in bytes, on the disk Podman stores images
+// and containers on, at Path.
+type HostDisk struct {
+	Path  string `json:"path"`
+	Used  uint64 `json:"used"`
+	Total uint64 `json:"total"`
+}
+
+// HostContainers counts the containers, and the ones that run.
+type HostContainers struct {
+	Running int `json:"running"`
+	Total   int `json:"total"`
+}
+
+// HostAutoUpdate says whether podman-auto-update.timer is on, and when it
+// runs next.
+type HostAutoUpdate struct {
+	Enabled bool `json:"enabled"`
+	NextRun Time `json:"next_run"`
+}
+
+// HostSystem describes the host. A value lpod couldn't read is null.
+type HostSystem struct {
+	OS             *string `json:"os"`
+	Kernel         *string `json:"kernel"`
+	BootedAt       Time    `json:"booted_at"`
+	StorageDriver  *string `json:"storage_driver"`
+	NetworkBackend *string `json:"network_backend"`
+	// QuadletDir has the home directory written as "~".
+	QuadletDir string `json:"quadlet_dir"`
+	// Linger is null as root, where it doesn't apply.
+	Linger *bool `json:"linger"`
+}
+
+// HostUnits counts the services of the Quadlets that are active, and that
+// failed.
+type HostUnits struct {
+	Active int `json:"active"`
+	Failed int `json:"failed"`
+}
+
+// Time is a time in the contract, such as "2026-11-15T15:00:00+00:00",
+// always in UTC and without a fraction of a second. The zero Time is null.
+type Time struct {
+	time.Time
+}
+
+// TimeLayout is how a Time is written.
+const TimeLayout = "2006-01-02T15:04:05+00:00"
+
+// MarshalJSON writes t, or null for the zero Time. Go calls it for every
+// Time in a payload, as a cast does in Laravel.
+func (t Time) MarshalJSON() ([]byte, error) {
+	if t.IsZero() {
+		return []byte("null"), nil
+	}
+
+	return json.Marshal(t.UTC().Format(TimeLayout))
+}
+
+// String returns s as a JSON string, or null when it's empty.
+func String(s string) *string {
+	if s == "" {
+		return nil
+	}
+
+	return &s
+}
+
 // Write prints payload as one JSON object, indented as jq prints it.
 func Write(w io.Writer, payload any) error {
 	encoder := json.NewEncoder(w)
 	encoder.SetIndent("", "  ")
+	encoder.SetEscapeHTML(false)
 
 	return encoder.Encode(payload)
 }

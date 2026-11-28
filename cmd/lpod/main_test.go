@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"strings"
 	"testing"
 )
 
@@ -13,7 +14,7 @@ func TestRunPrintsTheVersion(t *testing.T) {
 		code, ported := run(context.Background(), args, &stdout, &stderr)
 
 		if !ported || code != 0 {
-			t.Errorf("%q: got ported %v and code %d, want the version", args, ported, code)
+			t.Errorf("%q: got ported %v and code %d (%s), want the version", args, ported, code, stderr.String())
 		}
 
 		if stdout.String() != "lpod dev\n" {
@@ -23,7 +24,7 @@ func TestRunPrintsTheVersion(t *testing.T) {
 }
 
 func TestRunHandsOffWhatIsntPorted(t *testing.T) {
-	for _, args := range [][]string{{}, {"apps", "--json"}, {"stry", "version"}} {
+	for _, args := range [][]string{{}, {"apps", "--json"}, {"stry", "version"}, {"help"}, {"completion"}, {"--help"}} {
 		var stdout, stderr bytes.Buffer
 
 		if _, ported := run(context.Background(), args, &stdout, &stderr); ported {
@@ -36,20 +37,32 @@ func TestRunHandsOffWhatIsntPorted(t *testing.T) {
 	}
 }
 
-func TestIsVersionJSON(t *testing.T) {
+func TestIsPorted(t *testing.T) {
 	cases := []struct {
 		args []string
 		want bool
 	}{
 		{[]string{"version", "--json"}, true},
-		{[]string{"version", "--json", "extra"}, true},
-		{[]string{"version"}, false},
+		{[]string{"host"}, true},
+		{[]string{"host", "--json"}, true},
 		{[]string{"--json", "version"}, false},
+		{[]string{"hosts"}, false},
+		{[]string{"stry", "host"}, false},
 	}
 
 	for _, c := range cases {
-		if got := isVersionJSON(c.args); got != c.want {
-			t.Errorf("isVersionJSON(%q) = %v, want %v", c.args, got, c.want)
+		if got := isPorted(newRoot(&bytes.Buffer{}), c.args); got != c.want {
+			t.Errorf("isPorted(%q) = %v, want %v", c.args, got, c.want)
 		}
+	}
+}
+
+func TestRunRefusesArgumentsHostDoesntTake(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+
+	code, ported := run(context.Background(), []string{"host", "extra"}, &stdout, &stderr)
+
+	if !ported || code != 1 || !strings.Contains(stderr.String(), "unknown command") {
+		t.Errorf("got ported %v, code %d and %q, want an error", ported, code, stderr.String())
 	}
 }
