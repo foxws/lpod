@@ -381,12 +381,29 @@ test_case "journal and events"
 lpod journal --json
 check '.entries[0] == {"time": "2026-11-18T11:06:40+00:00", "unit": "glance", "priority": 3, "message": "Error: config: glance.yml: no such file or directory"}'
 check '.entries[1] | .time == "2026-11-18T12:06:40+00:00" and .message == "Started"'
+keeps_contract journal '.entries[0]'
 lpod events --json
 check '[.events[] | {time, action, application}] == [
     {"time": "2026-11-18T11:06:40+00:00", "action": "died", "application": "glance"},
     {"time": "2026-11-18T08:20:00+00:00", "action": "pull", "application": null}
 ]'
 check '.events[0].exit_code == 1'
+keeps_contract events '.events[0]'
+
+test_case "journal and events take their flags, and refuse wrong ones"
+lpod events --since 1h --limit 1 --json
+check '[.events[].action] == ["died"]'
+calls_like "^podman events --stream=false --since 1h " 1
+lpod journal --lines 9 --since boot --priority 3 --json
+calls_like "^journalctl .*--lines=9 --boot --priority.3 --output=json" 1
+
+for ARGS in "events --since forever --json" "events --limit 0 --json" "journal --lines 0 --json" "journal --priority 9 --json"; do
+    # shellcheck disable=SC2086 # the flags are split on purpose
+    lpod_status $ARGS
+    exited_with 1
+done
+
+calls_like "^(podman events|journalctl)" 2
 
 test_case "systemd timers"
 lpod settings --json

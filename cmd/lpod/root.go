@@ -4,7 +4,6 @@ import (
 	"io"
 	"os"
 	"slices"
-	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -30,7 +29,7 @@ func newRoot(stdout io.Writer) *cobra.Command {
 
 	root.SetOut(stdout)
 	root.SetVersionTemplate("lpod {{.Version}}\n")
-	root.AddCommand(newVersion(), newHost(), newAutoUpdate())
+	root.AddCommand(newVersion(), newHost(), newAutoUpdate(), newEvents(), newJournal())
 	root.AddCommand(newListings()...)
 
 	return root
@@ -62,16 +61,18 @@ func isPorted(root *cobra.Command, args []string) bool {
 		return true
 	}
 
-	// A word after a --json listing is an application named like it, as in
-	// "lpod images status --json", or one of its subcommands that's still
-	// the bash script's, such as "lpod images prune --json"...
-	for _, arg := range rest {
-		if !strings.HasPrefix(arg, "-") {
-			return false
-		}
+	// The flags are parsed to find what's left: a word after a --json
+	// listing is an application named like it, as in "lpod images status
+	// --json", or one of its subcommands that's still the bash script's,
+	// such as "lpod images prune --json". A flag lpod doesn't know is an
+	// error for lpod in Go to print...
+	if err := command.ParseFlags(rest); err != nil {
+		return slices.Contains(rest, "--json")
 	}
 
-	return slices.Contains(rest, "--json")
+	asJSON, _ := command.Flags().GetBool("json")
+
+	return asJSON && len(command.Flags().Args()) == 0
 }
 
 // rootful says whether lpod runs as root, which manages the system's
