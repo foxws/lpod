@@ -199,3 +199,19 @@ func Parse(quadlet podman.Quadlet, content string) Unit {
 
 	return Unit{Quadlet: quadlet, File: file}
 }
+
+// Labels are the Label= values in the Quadlet's own section whose keys
+// start with prefix, read as Quadlet reads them: quoted, and several to a
+// line.
+func (u Unit) Labels(prefix string) map[string]string {
+	labels := map[string]string{}
+	all, _ := u.File.LookupAllKeyVal(u.Section(), "Label")
+
+	for key, value := range all {
+		if strings.HasPrefix(key, prefix) && value != nil {
+			labels[key] = *value
+		}
+	}
+
+	return labels
+}

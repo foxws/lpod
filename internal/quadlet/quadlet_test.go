@@ -188,3 +188,17 @@ func TestDir(t *testing.T) {
 		}
 	}
 }
+
+func TestLabels(t *testing.T) {
+	unit := Parse(podman.Quadlet{Name: "demo-app.container"}, "[Container]\n"+
+		"Label=io.foxws.pods.url=https://demo.test\n"+
+		"Label=\"io.foxws.pods.description=A demo app\" other=x\n"+
+		"Label=io.foxws.pods.flag\n")
+
+	got := unit.Labels("io.foxws.pods.")
+	want := map[string]string{"io.foxws.pods.url": "https://demo.test", "io.foxws.pods.description": "A demo app"}
+
+	if len(got) != len(want) || got["io.foxws.pods.url"] != want["io.foxws.pods.url"] || got["io.foxws.pods.description"] != want["io.foxws.pods.description"] {
+		t.Errorf("got %v, want %v", got, want)
+	}
+}

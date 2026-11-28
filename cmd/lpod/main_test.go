@@ -24,7 +24,7 @@ func TestRunPrintsTheVersion(t *testing.T) {
 }
 
 func TestRunHandsOffWhatIsntPorted(t *testing.T) {
-	for _, args := range [][]string{{}, {"apps", "--json"}, {"demo", "version"}, {"help"}, {"completion"}, {"--help"}} {
+	for _, args := range [][]string{{}, {"demo", "logs", "--json"}, {"demo", "version"}, {"help"}, {"completion"}, {"--help"}} {
 		var stdout, stderr bytes.Buffer
 
 		if _, ported := run(context.Background(), args, &stdout, &stderr); ported {
@@ -70,6 +70,8 @@ func TestIsPorted(t *testing.T) {
 		{[]string{"journal", "--lines", "10", "--since", "boot", "--json"}, true},
 		{[]string{"journal", "status", "--json"}, false},
 		{[]string{"settings", "--json"}, true},
+		{[]string{"apps"}, true},
+		{[]string{"apps", "--json"}, true},
 		{[]string{"settings", "set", "--auto-update", "on", "--json"}, false},
 		{[]string{"auto-update", "--dry-run", "--json"}, true},
 		{[]string{"auto-update", "--json"}, true},
@@ -79,6 +81,29 @@ func TestIsPorted(t *testing.T) {
 	for _, c := range cases {
 		if got := isPorted(newRoot(&bytes.Buffer{}), c.args); got != c.want {
 			t.Errorf("isPorted(%q) = %v, want %v", c.args, got, c.want)
+		}
+	}
+}
+
+func TestAsAppCommand(t *testing.T) {
+	cases := []struct {
+		args []string
+		want []string
+	}{
+		{[]string{"demo", "status", "--json"}, []string{"_app", "status", "demo", "--json"}},
+		{[]string{"pods", "status", "--json"}, []string{"_app", "status", "pods", "--json"}},
+		{[]string{"demo", "status"}, nil},
+		{[]string{"demo", "logs", "--json"}, nil},
+		{[]string{"host", "status", "--json"}, nil},
+		{[]string{"auto-update", "status", "--json"}, nil},
+		{[]string{"status", "--json"}, nil},
+	}
+
+	for _, c := range cases {
+		got, ok := asAppCommand(newRoot(&bytes.Buffer{}), c.args)
+
+		if ok != (c.want != nil) || (ok && strings.Join(got, " ") != strings.Join(c.want, " ")) {
+			t.Errorf("asAppCommand(%q) = %q, %v, want %q", c.args, got, ok, c.want)
 		}
 	}
 }
