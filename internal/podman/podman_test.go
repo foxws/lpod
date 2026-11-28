@@ -120,3 +120,60 @@ func TestOutputThatIsntJSONIsAnError(t *testing.T) {
 		t.Errorf("got %v, want an error about podman info", err)
 	}
 }
+
+func TestContainersReadsTheImageAndLabels(t *testing.T) {
+	client := Client{Binary: "podman", Run: answer("podman ps --all --format json",
+		`[{"Id": "abc", "ImageID": "a1a1", "Labels": {"PODMAN_SYSTEMD_UNIT": "stry-app.service"}}, {"Id": "def", "Labels": null, "IsInfra": true}]`)}
+
+	containers, err := client.Containers(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if containers[0].ImageID != "a1a1" || containers[0].Unit() != "stry-app.service" {
+		t.Errorf("got %+v", containers[0])
+	}
+
+	if containers[1].Unit() != "" || !containers[1].IsInfra {
+		t.Errorf("got %+v, want an infra container without a unit", containers[1])
+	}
+}
+
+func TestImages(t *testing.T) {
+	client := Client{Binary: "podman", Run: answer("podman images --all --format json",
+		`[{"Id": "c3c3", "Names": ["ghcr.io/francoism90/stry:4"], "Size": 2000000000, "Created": 1795000000}, {"Id": "a1a1", "Names": null}]`)}
+
+	images, err := client.Images(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(images) != 2 || *images[0].Size != 2000000000 || images[0].Created != 1795000000 || images[1].Names != nil || images[1].Size != nil {
+		t.Errorf("got %+v", images)
+	}
+}
+
+func TestAutoUpdateDryRun(t *testing.T) {
+	client := Client{Binary: "podman", Run: answer("podman auto-update --dry-run --format json",
+		`[{"Unit": "stry-valkey.service", "ContainerID": "2222", "Updated": "pending"}, {"Unit": "stry-app.service", "ContainerID": "1111", "Updated": "false"}]`)}
+
+	updates, err := client.AutoUpdateDryRun(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(updates) != 2 || updates[0].ContainerID != "2222" || updates[0].Updated != "pending" || string(updates[0].Raw["Unit"]) != `"stry-valkey.service"` {
+		t.Errorf("got %+v", updates)
+	}
+}
+
+func TestAutoUpdateDryRunWithoutContainers(t *testing.T) {
+	for _, out := range []string{"", "null\n"} {
+		client := Client{Binary: "podman", Run: answer("podman auto-update --dry-run --format json", out)}
+
+		updates, err := client.AutoUpdateDryRun(context.Background())
+		if err != nil || len(updates) != 0 {
+			t.Errorf("%q: got %+v and %v, want none", out, updates, err)
+		}
+	}
+}
