@@ -54,3 +54,22 @@ func TestWriteIndentsAsJqDoes(t *testing.T) {
 		t.Errorf("got %q", out.String())
 	}
 }
+
+func TestParseTime(t *testing.T) {
+	out, _ := json.Marshal(ParseTime("2026-11-17T11:00:00.123456789+01:00"))
+	if string(out) != `"2026-11-17T10:00:00+00:00"` {
+		t.Errorf("got %s", out)
+	}
+
+	for _, none := range []string{"", "0001-01-01T00:00:00Z", "yesterday"} {
+		if !ParseTime(none).IsZero() {
+			t.Errorf("ParseTime(%q) isn't null", none)
+		}
+	}
+}
+
+func TestUnix(t *testing.T) {
+	if !Unix(0).IsZero() || Unix(1795000000).Unix() != 1795000000 {
+		t.Error("got the wrong time")
+	}
+}

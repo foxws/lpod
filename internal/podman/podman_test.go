@@ -177,3 +177,54 @@ func TestAutoUpdateDryRunWithoutContainers(t *testing.T) {
 		}
 	}
 }
+
+func TestPortString(t *testing.T) {
+	cases := map[string]Port{
+		"0.0.0.0:8000->8080/tcp":           {HostPort: 8000, ContainerPort: 8080, Protocol: "tcp", Range: 1},
+		"127.0.0.1:53->53/udp":             {HostIP: "127.0.0.1", HostPort: 53, ContainerPort: 53, Protocol: "udp"},
+		"[::1]:9000->80/tcp":               {HostIP: "::1", HostPort: 9000, ContainerPort: 80},
+		"0.0.0.0:8000-8009->8080-8089/tcp": {HostPort: 8000, ContainerPort: 8080, Range: 10},
+	}
+
+	for want, port := range cases {
+		if got := port.String(); got != want {
+			t.Errorf("got %s, want %s", got, want)
+		}
+	}
+}
+
+func TestPods(t *testing.T) {
+	client := Client{Binary: "podman", Run: answer("podman pod ps --format json",
+		`[{"Id": "5555", "Name": "scratch-pod", "Status": "Degraded", "Created": "2026-11-17T10:00:00.1Z", "Labels": {"PODMAN_SYSTEMD_UNIT": "scratch-pod.service"}, "Networks": ["podman"]}]`)}
+
+	pods, err := client.Pods(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(pods) != 1 || pods[0].Unit() != "scratch-pod.service" || pods[0].Networks[0] != "podman" {
+		t.Errorf("got %+v", pods)
+	}
+}
+
+func TestStatsReadsALinePerContainer(t *testing.T) {
+	client := Client{Binary: "podman", Run: answer("podman stats --no-stream --format {{json .}}",
+		"{\"Name\": \"demo-app\", \"CPU\": 2.5, \"MemUsage\": 300000000}\n{\"Name\": \"demo-valkey\", \"CPU\": 0.5, \"MemUsage\": 20000000}\n")}
+
+	stats, err := client.Stats(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(stats) != 2 || stats[0].CPU != 2.5 || stats[1].MemUsage != 20000000 {
+		t.Errorf("got %+v", stats)
+	}
+}
+
+func TestByUnit(t *testing.T) {
+	units := ByUnit([]Quadlet{{Name: "demo-app.container", UnitName: "demo-app.service"}})
+
+	if units["demo-app.service"].Name != "demo-app.container" {
+		t.Errorf("got %v", units)
+	}
+}
