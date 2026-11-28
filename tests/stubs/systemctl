@@ -13,7 +13,7 @@ VALUE=false
 
 for ARG in "$@"; do
     case "$ARG" in
-        --user|--timestamp=*|--property=*|--quiet|--no-block|--signal=*) ;;
+        --user|--timestamp=*|--property=*|--quiet|--no-block|--signal=*|--) ;;
         --value) VALUE=true ;;
         *) ARGS+=("$ARG") ;;
     esac
