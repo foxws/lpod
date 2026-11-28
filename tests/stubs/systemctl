@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # A stand-in for systemctl: "show" prints the units in LPOD_TEST_HOST/units,
-# which start, restart, stop and kill change and is-active reads,
-# "list-units --failed" prints LPOD_TEST_HOST/failed-units, and every other
-# call succeeds. Every call is logged to LPOD_TEST_LOG...
+# which start, restart, stop and kill change and is-active reads, --version
+# prints systemd 258, "list-units --failed" prints
+# LPOD_TEST_HOST/failed-units, and every other call succeeds. Every call is
+# logged to LPOD_TEST_LOG...
 
 HOST="${LPOD_TEST_HOST:?}"
 echo "systemctl $*" >> "${LPOD_TEST_LOG:?}"
@@ -39,9 +40,11 @@ function set_state {
     done
 }
 
-# start, restart, stop and kill change the units' state, and is-active
-# succeeds when one of the units is active, like systemctl...
+# start, restart, stop and kill change the units' state, is-active
+# succeeds when one of the units is active, like systemctl, and --version
+# prints systemd's version as its first line does...
 case "${ARGS[0]:-}" in
+    --version) echo "systemd 258 (258.1-1.fc45)"; exit 0 ;;
     start|restart) set_state active running "${ARGS[@]:1}"; exit 0 ;;
     stop|kill) set_state inactive dead "${ARGS[@]:1}"; exit 0 ;;
     is-active)
