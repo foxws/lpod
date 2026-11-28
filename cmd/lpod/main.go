@@ -28,6 +28,11 @@ func main() {
 // run runs args when lpod implements them in Go, and says whether it did.
 // It returns the exit code, which is 1 when the command failed.
 func run(ctx context.Context, args []string, stdout, stderr io.Writer) (code int, ported bool) {
+	// "lpod APP ACTION --json" runs as a hidden command...
+	if translated, ok := asAppCommand(newRoot(io.Discard), args); ok {
+		args = translated
+	}
+
 	// isPorted parses the flags on a root of its own, so the command runs
 	// on one that hasn't...
 	if !isPorted(newRoot(io.Discard), args) {

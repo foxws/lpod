@@ -220,3 +220,26 @@ func List(ctx context.Context, client podman.Client, reader Reader, options Opti
 
 	return contract.Journal{Contract: contract.Current, Entries: entries}, nil
 }
+
+// LastError is the last line unit logged at the priority "err" or above,
+// or "".
+func (r Reader) LastError(ctx context.Context, unit string) string {
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	var command []string
+	if r.User {
+		command = append(command, "--user")
+	}
+
+	command = append(command, "--unit="+unit, "--priority=err", "--lines=1", "--output=cat", "--no-pager")
+
+	out, err := r.Run(ctx, "journalctl", command...)
+	if err != nil {
+		return ""
+	}
+
+	lines := strings.Split(strings.TrimRight(string(out), "\n"), "\n")
+
+	return lines[len(lines)-1]
+}

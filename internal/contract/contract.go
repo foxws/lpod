@@ -316,6 +316,106 @@ type AutoUpdateSettings struct {
 	LastRun  Time `json:"last_run"`
 }
 
+// Apps is what "lpod apps --json" prints (apps.json).
+type Apps struct {
+	Contract     int           `json:"contract"`
+	Applications []Application `json:"applications"`
+}
+
+// Application is an installed application: the Quadlets installed together,
+// or one installed on its own.
+type Application struct {
+	Name string `json:"name"`
+	// Unit is the main unit's: the .pod's, else the .kube's, else the
+	// .container's, and Kind its type.
+	Unit string `json:"unit"`
+	Kind string `json:"kind"`
+	// Status is the main unit's: "running" for active, such as "failed"
+	// or "inactive" otherwise, or "unknown".
+	Status string  `json:"status"`
+	Result *string `json:"result"`
+	Since  Time    `json:"since"`
+	// Image is what the main container runs, or its Image=.
+	Image *string `json:"image"`
+	// Pods counts the .pod and .kube Quadlets, and Containers the
+	// containers.
+	Pods       int      `json:"pods"`
+	Containers int      `json:"containers"`
+	Ports      []string `json:"ports"`
+	// Memory is the bytes its running containers use, or null.
+	Memory     *uint64 `json:"memory"`
+	AutoUpdate *string `json:"auto_update"`
+	// Labels are the io.foxws.pods.* labels of its Quadlets.
+	Labels map[string]string `json:"labels"`
+	// Error is only there for a failed application: the last error its
+	// main unit logged, or null.
+	Error Message `json:"error,omitzero"`
+}
+
+// AppStatus is what "lpod APP status --json" prints (app-status.json).
+type AppStatus struct {
+	Contract    int               `json:"contract"`
+	Application ApplicationDetail `json:"application"`
+}
+
+// ApplicationDetail is an Application with what "APP status" adds. Go
+// writes the fields of the embedded Application as its own.
+type ApplicationDetail struct {
+	Application
+
+	// Path is the directory of its main Quadlet.
+	Path    string              `json:"path"`
+	Volumes []ApplicationVolume `json:"volumes"`
+	// Secrets are the Podman secrets its containers use.
+	Secrets []string          `json:"secrets"`
+	Items   []ApplicationItem `json:"items"`
+}
+
+// ApplicationVolume is a volume an application's .volume creates. Size is
+// always null here.
+type ApplicationVolume struct {
+	Name string `json:"name"`
+	Size *int64 `json:"size"`
+}
+
+// ApplicationItem is a container of an application's .container Quadlets.
+type ApplicationItem struct {
+	Name   string   `json:"name"`
+	Image  *string  `json:"image"`
+	State  string   `json:"state"`
+	CPU    *float64 `json:"cpu"`
+	Memory *uint64  `json:"memory"`
+}
+
+// Message is a text that can be null, and left out: the zero Message isn't
+// written with "omitzero", and Null is written as null.
+type Message struct {
+	set  bool
+	text *string
+}
+
+// Null is a Message that's written as null.
+var Null = Message{set: true}
+
+// Text is a Message with text, or Null when it's empty.
+func Text(text string) Message {
+	if text == "" {
+		return Null
+	}
+
+	return Message{set: true, text: &text}
+}
+
+// IsZero says whether the Message is left out.
+func (m Message) IsZero() bool {
+	return !m.set
+}
+
+// MarshalJSON writes the text, or null.
+func (m Message) MarshalJSON() ([]byte, error) {
+	return json.Marshal(m.text)
+}
+
 // OK is what a --json command that only changes something prints.
 type OK struct {
 	Contract int  `json:"contract"`

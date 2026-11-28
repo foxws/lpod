@@ -73,3 +73,21 @@ func TestUnix(t *testing.T) {
 		t.Error("got the wrong time")
 	}
 }
+
+func TestMessage(t *testing.T) {
+	type payload struct {
+		Error Message `json:"error,omitzero"`
+	}
+
+	cases := map[string]Message{`{}`: {}, `{"error":null}`: Null, `{"error":"no secret"}`: Text("no secret")}
+
+	for want, message := range cases {
+		if out, _ := json.Marshal(payload{message}); string(out) != want {
+			t.Errorf("got %s, want %s", out, want)
+		}
+	}
+
+	if Text("") != Null {
+		t.Error("an empty text isn't null")
+	}
+}

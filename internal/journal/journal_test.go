@@ -117,3 +117,20 @@ func TestAnEmptyJournalIsAnEmptyList(t *testing.T) {
 		t.Errorf("got %s and %v", out, err)
 	}
 }
+
+func TestLastError(t *testing.T) {
+	var call string
+	reader := Reader{User: true, Run: func(_ context.Context, name string, args ...string) ([]byte, error) {
+		call = strings.Join(append([]string{name}, args...), " ")
+
+		return []byte("Error: config: glance.yml: no such file or directory\n"), nil
+	}}
+
+	if got := reader.LastError(context.Background(), "glance.service"); got != "Error: config: glance.yml: no such file or directory" {
+		t.Errorf("got %q", got)
+	}
+
+	if call != "journalctl --user --unit=glance.service --priority=err --lines=1 --output=cat --no-pager" {
+		t.Errorf("ran %q", call)
+	}
+}

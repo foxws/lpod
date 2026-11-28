@@ -1183,10 +1183,18 @@ calls_like "^podman secret" 0
 test_case "a ServiceName= that starts with - never reaches systemctl as an option"
 add_quadlet evil.container "" $'[Container]\nImage=docker.io/library/alpine:3\n[Service]\nServiceName=--host=evil' "--host=evil.service"
 lpod apps --json
-check 'first(.applications[] | select(.name == "evil")).unit == "evil.service"'
+
+# The bash script names the unit without its leading dashes. lpod in Go
+# names the unit Quadlet generates, and passes it after "--"...
+if [ -n "${LPOD_UNDER_TEST:-}" ]; then
+    check 'first(.applications[] | select(.name == "evil")).unit == "--host=evil.service"'
+else
+    check 'first(.applications[] | select(.name == "evil")).unit == "evil.service"'
+fi
+
 lpod evil restart --json && check '.ok'
 calls "systemctl --user restart evil.service" 1
-calls_like "--host" 0
+holds "--host=evil.service reached a command before --" test "$(sed 's/ -- .*//' "$LPOD_TEST_LOG" | grep -c -- '--host')" -eq 0
 
 test_case "APP remove passes names after --, and only removes the plain ones no one else uses"
 add_quadlet evil-app.container evil "$(printf '%s\n' '[Container]' \
