@@ -2,7 +2,7 @@
   {
     "Id": "c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3",
     "Names": [
-      "ghcr.io/francoism90/stry:4"
+      "ghcr.io/example/demo:4"
     ],
     "Size": 2000000000,
     "Created": 1795000000,

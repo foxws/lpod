@@ -1,7 +1,7 @@
 [
-    {"Name": "stry-app.container", "UnitName": "stry-app.service", "Path": "@QUADLETS@/stry-app.container", "Status": "active/running", "App": "stry"},
-    {"Name": "stry-valkey.container", "UnitName": "stry-valkey.service", "Path": "@QUADLETS@/stry-valkey.container", "Status": "active/running", "App": "stry"},
-    {"Name": "stry-data.volume", "UnitName": "stry-data-volume.service", "Path": "@QUADLETS@/stry-data.volume", "Status": "active/exited", "App": "stry"},
-    {"Name": "stry.network", "UnitName": "stry-network.service", "Path": "@QUADLETS@/stry.network", "Status": "active/exited", "App": "stry"},
+    {"Name": "demo-app.container", "UnitName": "demo-app.service", "Path": "@QUADLETS@/demo-app.container", "Status": "active/running", "App": "demo"},
+    {"Name": "demo-valkey.container", "UnitName": "demo-valkey.service", "Path": "@QUADLETS@/demo-valkey.container", "Status": "active/running", "App": "demo"},
+    {"Name": "demo-data.volume", "UnitName": "demo-data-volume.service", "Path": "@QUADLETS@/demo-data.volume", "Status": "active/exited", "App": "demo"},
+    {"Name": "demo.network", "UnitName": "demo-network.service", "Path": "@QUADLETS@/demo.network", "Status": "active/exited", "App": "demo"},
     {"Name": "glance.container", "UnitName": "glance.service", "Path": "@QUADLETS@/glance.container", "Status": "failed/failed", "App": ""}
 ]

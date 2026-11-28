@@ -53,14 +53,14 @@ func TestInfo(t *testing.T) {
 
 func TestContainers(t *testing.T) {
 	client := Client{Binary: "podman", Run: answer("podman ps --all --format json",
-		`[{"Id": "abc", "Names": ["stry-app"], "State": "running"}]`)}
+		`[{"Id": "abc", "Names": ["demo-app"], "State": "running"}]`)}
 
 	containers, err := client.Containers(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if len(containers) != 1 || containers[0].Names[0] != "stry-app" || containers[0].State != "running" {
+	if len(containers) != 1 || containers[0].Names[0] != "demo-app" || containers[0].State != "running" {
 		t.Errorf("got %+v", containers)
 	}
 }
@@ -76,9 +76,9 @@ func TestContainersReadsNullAsNone(t *testing.T) {
 
 func TestQuadlets(t *testing.T) {
 	client := Client{Binary: "podman", Run: answer("podman quadlet list --format json", `[
-		{"Name": "stry-app.container", "UnitName": "stry-app.service", "App": "stry"},
+		{"Name": "demo-app.container", "UnitName": "demo-app.service", "App": "demo"},
 		{"Name": "glance.container", "UnitName": "glance.service", "App": ""},
-		{"Name": "stry-data.volume", "UnitName": "stry-data-volume.service", "App": "stry"}
+		{"Name": "demo-data.volume", "UnitName": "demo-data-volume.service", "App": "demo"}
 	]`)}
 
 	quadlets, err := client.Quadlets(context.Background())
@@ -92,9 +92,9 @@ func TestQuadlets(t *testing.T) {
 	}
 
 	want := []summary{
-		{"stry-app", "container", "stry", true},
+		{"demo-app", "container", "demo", true},
 		{"glance", "container", "glance", true},
-		{"stry-data", "volume", "stry", false},
+		{"demo-data", "volume", "demo", false},
 	}
 
 	for i, q := range quadlets {
@@ -123,14 +123,14 @@ func TestOutputThatIsntJSONIsAnError(t *testing.T) {
 
 func TestContainersReadsTheImageAndLabels(t *testing.T) {
 	client := Client{Binary: "podman", Run: answer("podman ps --all --format json",
-		`[{"Id": "abc", "ImageID": "a1a1", "Labels": {"PODMAN_SYSTEMD_UNIT": "stry-app.service"}}, {"Id": "def", "Labels": null, "IsInfra": true}]`)}
+		`[{"Id": "abc", "ImageID": "a1a1", "Labels": {"PODMAN_SYSTEMD_UNIT": "demo-app.service"}}, {"Id": "def", "Labels": null, "IsInfra": true}]`)}
 
 	containers, err := client.Containers(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if containers[0].ImageID != "a1a1" || containers[0].Unit() != "stry-app.service" {
+	if containers[0].ImageID != "a1a1" || containers[0].Unit() != "demo-app.service" {
 		t.Errorf("got %+v", containers[0])
 	}
 
@@ -141,7 +141,7 @@ func TestContainersReadsTheImageAndLabels(t *testing.T) {
 
 func TestImages(t *testing.T) {
 	client := Client{Binary: "podman", Run: answer("podman images --all --format json",
-		`[{"Id": "c3c3", "Names": ["ghcr.io/francoism90/stry:4"], "Size": 2000000000, "Created": 1795000000}, {"Id": "a1a1", "Names": null}]`)}
+		`[{"Id": "c3c3", "Names": ["ghcr.io/example/demo:4"], "Size": 2000000000, "Created": 1795000000}, {"Id": "a1a1", "Names": null}]`)}
 
 	images, err := client.Images(context.Background())
 	if err != nil {
@@ -155,14 +155,14 @@ func TestImages(t *testing.T) {
 
 func TestAutoUpdateDryRun(t *testing.T) {
 	client := Client{Binary: "podman", Run: answer("podman auto-update --dry-run --format json",
-		`[{"Unit": "stry-valkey.service", "ContainerID": "2222", "Updated": "pending"}, {"Unit": "stry-app.service", "ContainerID": "1111", "Updated": "false"}]`)}
+		`[{"Unit": "demo-valkey.service", "ContainerID": "2222", "Updated": "pending"}, {"Unit": "demo-app.service", "ContainerID": "1111", "Updated": "false"}]`)}
 
 	updates, err := client.AutoUpdateDryRun(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if len(updates) != 2 || updates[0].ContainerID != "2222" || updates[0].Updated != "pending" || string(updates[0].Raw["Unit"]) != `"stry-valkey.service"` {
+	if len(updates) != 2 || updates[0].ContainerID != "2222" || updates[0].Updated != "pending" || string(updates[0].Raw["Unit"]) != `"demo-valkey.service"` {
 		t.Errorf("got %+v", updates)
 	}
 }

@@ -225,9 +225,9 @@ done
 test_case "auto-update --dry-run keeps the image each pending container runs"
 lpod auto-update --dry-run --json && check '.ok'
 OUTPUT="$(cat "${XDG_CACHE_HOME}/lpod/auto-update.json")"
-check "first(.[] | select(.ContainerName == \"stry-valkey\")).ImageID == \"${OLD_VALKEY}\""
+check "first(.[] | select(.ContainerName == \"demo-valkey\")).ImageID == \"${OLD_VALKEY}\""
 check 'first(.[] | select(.ContainerName == "gone")).ImageID == null'
-check 'first(.[] | select(.ContainerName == "stry-app")).ImageID == null'
+check 'first(.[] | select(.ContainerName == "demo-app")).ImageID == null'
 
 test_case "auto-update only does a dry run"
 lpod_status auto-update --json
@@ -246,8 +246,8 @@ calls_like "^podman images" 0
 test_case "images shows an update until the image is pulled"
 lpod auto-update --dry-run --json
 lpod images --json
-check 'first(.images[] | select(.repository == "docker.io/library/valkey")) | .update == "9" and .used_by == ["stry"] and .containers == 2'
-check 'first(.images[] | select(.repository == "ghcr.io/francoism90/stry")).update == null'
+check 'first(.images[] | select(.repository == "docker.io/library/valkey")) | .update == "9" and .used_by == ["demo"] and .containers == 2'
+check 'first(.images[] | select(.repository == "ghcr.io/example/demo")).update == null'
 keeps_contract images '.images[0]'
 lpod image pull docker.io/library/valkey:9 --json
 lpod images --json
@@ -270,9 +270,9 @@ calls "$PODMAN_STATS" 0
 
 test_case "volumes"
 lpod volumes --json
-check 'first(.volumes[] | select(.name == "stry-data")) | .quadlet == "stry-data.volume" and .applications == ["stry"] and .containers == ["stry-app"]'
-check 'first(.volumes[] | select(.name == "f00dcafe")) | .type == "anonymous" and .applications == ["stry"]'
-check 'first(.volumes[] | select(.name == "/srv/media")) | .type == "bind" and .applications == ["stry"]'
+check 'first(.volumes[] | select(.name == "demo-data")) | .quadlet == "demo-data.volume" and .applications == ["demo"] and .containers == ["demo-app"]'
+check 'first(.volumes[] | select(.name == "f00dcafe")) | .type == "anonymous" and .applications == ["demo"]'
+check 'first(.volumes[] | select(.name == "/srv/media")) | .type == "bind" and .applications == ["demo"]'
 keeps_contract volumes '.volumes[0]'
 calls "$QUADLET_LIST" 1
 calls "$PODMAN_PS" 1
@@ -280,7 +280,7 @@ calls "$PODMAN_STATS" 0
 
 test_case "networks"
 lpod networks --json
-check 'first(.networks[] | select(.name == "stry")) | .quadlet == "stry.network" and .applications == ["stry"] and .containers == 2'
+check 'first(.networks[] | select(.name == "demo")) | .quadlet == "demo.network" and .applications == ["demo"] and .containers == 2'
 check 'first(.networks[] | select(.name == "podman")) | .default and .applications == ["glance"] and .containers == 2'
 keeps_contract networks '.networks[0]'
 calls "$QUADLET_LIST" 1
@@ -289,24 +289,24 @@ calls "$PODMAN_STATS" 0
 
 test_case "containers"
 lpod containers --json
-check 'first(.containers[] | select(.name == "stry-app")) | .application == "stry" and .cpu == 2.5 and .memory == 300000000 and .health == "healthy"'
+check 'first(.containers[] | select(.name == "demo-app")) | .application == "demo" and .cpu == 2.5 and .memory == 300000000 and .health == "healthy"'
 check 'first(.containers[] | select(.name == "systemd-glance")) | .application == "glance" and .cpu == null and .exit_code == 1'
 check 'first(.containers[] | select(.name == "scratch")) | .application == null and .unit == null'
 keeps_contract containers '.containers[0]'
 calls "$PODMAN_STATS" 1
 
 test_case "container NAME inspect shows stats, and its actions don't"
-lpod container stry-app inspect --json
-check '.container | .cpu == 2.5 and .quadlet == "stry-app.container" and .restarts == 0 and .auto_update == "registry"'
+lpod container demo-app inspect --json
+check '.container | .cpu == 2.5 and .quadlet == "demo-app.container" and .restarts == 0 and .auto_update == "registry"'
 calls "$QUADLET_LIST" 1
 calls "$PODMAN_STATS" 1
 forget_calls
-lpod container stry-valkey restart --json
+lpod container demo-valkey restart --json
 calls "$PODMAN_STATS" 0
 
 test_case "apps"
 lpod apps --json
-check 'first(.applications[] | select(.name == "stry")) | .status == "running" and .kind == "container" and .memory == 320000000 and .containers == 2 and .ports == ["0.0.0.0:8000->8080/tcp"]'
+check 'first(.applications[] | select(.name == "demo")) | .status == "running" and .kind == "container" and .memory == 320000000 and .containers == 2 and .ports == ["0.0.0.0:8000->8080/tcp"]'
 check 'first(.applications[] | select(.name == "glance")) | .status == "failed" and .error == "Error: config: glance.yml: no such file or directory"'
 keeps_contract apps '.applications[0]'
 calls "$QUADLET_LIST" 1
@@ -314,8 +314,8 @@ calls "$PODMAN_PS" 1
 calls "$PODMAN_STATS" 1
 
 test_case "APP status"
-lpod stry status --json
-check '.application | .name == "stry" and (.items | length) == 2 and first(.items[] | select(.name == "stry-valkey")).cpu == 0.5 and .volumes == [{"name": "stry-data", "size": null}]'
+lpod demo status --json
+check '.application | .name == "demo" and (.items | length) == 2 and first(.items[] | select(.name == "demo-valkey")).cpu == 0.5 and .volumes == [{"name": "demo-data", "size": null}]'
 keeps_contract app-status '.application'
 calls "$QUADLET_LIST" 1
 calls "$PODMAN_PS" 1
@@ -324,18 +324,18 @@ check '.application | .status == "failed" and .error == "Error: config: glance.y
 
 test_case "times and ports of the listings"
 lpod images --json
-check 'first(.images[] | select(.repository == "ghcr.io/francoism90/stry")).created_at == "2026-11-18T11:06:40+00:00"'
+check 'first(.images[] | select(.repository == "ghcr.io/example/demo")).created_at == "2026-11-18T11:06:40+00:00"'
 lpod containers --json
-check 'first(.containers[] | select(.name == "stry-app")).started_at == "2026-11-18T11:06:40+00:00"'
+check 'first(.containers[] | select(.name == "demo-app")).started_at == "2026-11-18T11:06:40+00:00"'
 check 'first(.containers[] | select(.name == "systemd-glance")).started_at == null'
 check 'first(.containers[] | select(.name == "scratch")) | .started_at == null and .pod == "scratch-pod"'
 check '[.containers[].name] | index("5555-infra") == null'
-lpod container stry-app inspect --json
+lpod container demo-app inspect --json
 check '.container.created_at == "2026-11-26T10:00:00Z"'
 lpod container scratch inspect --json
 check '.container.created_at == null'
 lpod apps --json
-check 'first(.applications[] | select(.name == "stry")).since == "2026-11-18T11:06:40+00:00"'
+check 'first(.applications[] | select(.name == "demo")).since == "2026-11-18T11:06:40+00:00"'
 lpod pods --json
 check '.pods == [{"id": "555555555555", "name": "scratch-pod", "status": "degraded", "application": null, "quadlet": null, "unit": null, "containers": 1, "running": 0, "ports": ["127.0.0.1:9000->80/tcp"], "networks": ["podman"], "created_at": "2026-11-17T10:00:00Z"}]'
 
@@ -353,7 +353,7 @@ check '.events[0].exit_code == 1'
 test_case "systemd timers"
 lpod settings --json
 check '.settings.auto_update == {"enabled": true, "schedule": "*-*-* 03:00:00", "rollback": true, "next_run": "2026-11-18T12:06:40+00:00", "last_run": null}'
-lpod stry timers --json
+lpod demo timers --json
 check '.timers[0] | .name == "backup" and .enabled and .running and .next_run == "2026-11-18T12:06:40+00:00" and .last_run == "2026-11-18T08:20:00+00:00" and .last_result == null'
 lpod host --json
 check '.auto_update == {"enabled": true, "next_run": "2026-11-18T12:06:40+00:00"}'
@@ -385,11 +385,11 @@ exited_with 0
 if grep -q "✓ Podman 6.2.0 with Quadlet" <<< "$OUTPUT"; then pass; else fail "doctor's text output lacks the Podman check: ${OUTPUT}"; fi
 
 test_case "doctor finds problems"
-printf 'glance.service\nstry-ondemand.socket\napp-nvidia\\x2dsettings\\x2dload@autostart.service\n' > "${LPOD_TEST_HOST}/failed-units"
+printf 'glance.service\ndemo-ondemand.socket\napp-nvidia\\x2dsettings\\x2dload@autostart.service\n' > "${LPOD_TEST_HOST}/failed-units"
 echo vfs > "${LPOD_TEST_HOST}/storage-driver"
 echo no > "${LPOD_TEST_HOST}/linger"
 lpod_status doctor --json
-check 'first(.checks[] | select(.id == "failed-services")) | .status == "warn" and .message == "These applications'"'"' services have failed: glance.service stry-ondemand.socket (1 other unit(s) failed: app-nvidia\\x2dsettings\\x2dload@autostart.service)"'
+check 'first(.checks[] | select(.id == "failed-services")) | .status == "warn" and .message == "These applications'"'"' services have failed: glance.service demo-ondemand.socket (1 other unit(s) failed: app-nvidia\\x2dsettings\\x2dload@autostart.service)"'
 check 'first(.checks[] | select(.id == "storage")) | .status == "warn" and (.fix | contains("podman system reset"))'
 
 if [ "$(id -u)" -ne 0 ]; then
@@ -431,13 +431,13 @@ calls "podman image prune --all --force" 1
 
 test_case "containers, volumes and networks prune report what they removed"
 printf '%s\n' "$(printf 'ab%.0s' {1..32})" > "${LPOD_TEST_HOST}/pruned-container"
-printf '%s\n' stry-cache "$(printf '9c%.0s' {1..32})" > "${LPOD_TEST_HOST}/pruned-volume"
+printf '%s\n' demo-cache "$(printf '9c%.0s' {1..32})" > "${LPOD_TEST_HOST}/pruned-volume"
 printf 'iot\n' > "${LPOD_TEST_HOST}/pruned-network"
 lpod containers prune --json
 check '. == {"contract": 1, "removed": ["abababababab"], "reclaimed": null}'
 keeps_contract container-prune '.'
 lpod volumes prune --json
-check '.removed == ["stry-cache", "9c9c9c9c9c9c"] and .reclaimed == null'
+check '.removed == ["demo-cache", "9c9c9c9c9c9c"] and .reclaimed == null'
 keeps_contract volume-prune '.'
 lpod networks prune --json
 check '. == {"contract": 1, "removed": ["iot"], "reclaimed": null}'
@@ -464,8 +464,8 @@ test_case "container NAME start|stop|restart goes through the container's unit, 
 
 for ACTION in start stop restart; do
     forget_calls
-    lpod container stry-app "$ACTION" --json && check '.ok'
-    calls "systemctl --user --no-block ${ACTION} stry-app.service" 1
+    lpod container demo-app "$ACTION" --json && check '.ok'
+    calls "systemctl --user --no-block ${ACTION} demo-app.service" 1
     calls_like "^podman (start|stop|restart)" 0
 done
 
@@ -480,30 +480,30 @@ test_case "container NAME refuses an unknown container or action"
 lpod_status container ghost start --json
 exited_with 1
 said "No container named ghost."
-lpod_status container stry-app pause --json
+lpod_status container demo-app pause --json
 exited_with 1
 said "Usage: lpod container NAME"
 calls_like "^(podman|systemctl .*) (start|stop|restart|pause)" 0
 
 test_case "container NAME exec reports the command's exit code and output, and fails only on podman's own errors"
-lpod container stry-app exec --json -- sh -c 'echo out; echo err >&2; exit 3'
+lpod container demo-app exec --json -- sh -c 'echo out; echo err >&2; exit 3'
 check '. == {"contract": 1, "exit_code": 3, "stdout": "out\n", "stderr": "err\n"}'
 keeps_contract container-exec '.'
-lpod container stry-app exec --user www-data --workdir /app --json -- true && check '.exit_code == 0'
-calls "podman exec --user www-data --workdir /app stry-app true" 1
-lpod container stry-app exec --json -- sh -c 'head -c 70000 /dev/zero | tr "\0" a'
+lpod container demo-app exec --user www-data --workdir /app --json -- true && check '.exit_code == 0'
+calls "podman exec --user www-data --workdir /app demo-app true" 1
+lpod container demo-app exec --json -- sh -c 'head -c 70000 /dev/zero | tr "\0" a'
 check '(.stdout | length) == 65536'
-lpod_status container stry-app exec --user ghost --json -- true
+lpod_status container demo-app exec --user ghost --json -- true
 exited_with 1
 said "unable to find user ghost"
 holds "a failed exec printed JSON" test -z "$OUTPUT"
 
 test_case "container NAME exec only passes stdin on with --stdin"
-lpod container stry-app exec --stdin --json -- cat < <(printf 'p4ss')
+lpod container demo-app exec --stdin --json -- cat < <(printf 'p4ss')
 check '.stdout == "p4ss"'
-calls "podman exec --interactive stry-app cat" 1
+calls "podman exec --interactive demo-app cat" 1
 calls_like "p4ss" 0
-lpod container stry-app exec --json -- cat < <(printf 'p4ss')
+lpod container demo-app exec --json -- cat < <(printf 'p4ss')
 check '.stdout == ""'
 calls "podman exec: stdin is open" 0
 
@@ -511,31 +511,31 @@ test_case "container NAME exec refuses a stopped container, a missing command an
 lpod_status container scratch exec --json -- true
 exited_with 1
 said "scratch isn't running"
-lpod_status container stry-app exec --json
+lpod_status container demo-app exec --json
 exited_with 1
 said "Usage: lpod container NAME exec"
-lpod_status container stry-app exec --tty --json -- true
+lpod_status container demo-app exec --tty --json -- true
 exited_with 1
 said "Unknown option: --tty"
 calls_like "^podman exec" 0
 
 test_case "APP up and restart act on the main unit, and down stops every service"
-lpod stry up --json && check '.ok'
-calls "systemctl --user start stry-app.service" 1
-lpod stry restart --no-block --json && check '.ok'
-calls "systemctl --user --no-block restart stry-app.service" 1
-lpod stry down --json && check '.ok'
-calls "systemctl --user stop stry-app.service stry-valkey.service" 1
-lpod stry down --no-block --json && check '.ok'
-calls "systemctl --user --no-block stop stry-app.service stry-valkey.service" 1
+lpod demo up --json && check '.ok'
+calls "systemctl --user start demo-app.service" 1
+lpod demo restart --no-block --json && check '.ok'
+calls "systemctl --user --no-block restart demo-app.service" 1
+lpod demo down --json && check '.ok'
+calls "systemctl --user stop demo-app.service demo-valkey.service" 1
+lpod demo down --no-block --json && check '.ok'
+calls "systemctl --user --no-block stop demo-app.service demo-valkey.service" 1
 
 test_case "APP down --force kills every service, and clears its failed state"
-lpod stry down --force --json && check '.ok'
-calls "systemctl --user --no-block stop stry-app.service stry-valkey.service" 1
-calls "systemctl --user kill --signal=SIGKILL stry-app.service stry-valkey.service" 1
-calls "systemctl --user --quiet is-active stry-app.service stry-valkey.service" 1
-calls "systemctl --user reset-failed stry-app.service stry-valkey.service" 1
-lpod_status stry up --force --json
+lpod demo down --force --json && check '.ok'
+calls "systemctl --user --no-block stop demo-app.service demo-valkey.service" 1
+calls "systemctl --user kill --signal=SIGKILL demo-app.service demo-valkey.service" 1
+calls "systemctl --user --quiet is-active demo-app.service demo-valkey.service" 1
+calls "systemctl --user reset-failed demo-app.service demo-valkey.service" 1
+lpod_status demo up --force --json
 exited_with 1
 said "--force only works with down."
 
@@ -550,40 +550,40 @@ done
 calls_like "^(systemctl .*(start|stop|restart)|podman pull)" 0
 
 test_case "APP up and restart wake an on-demand application that sleeps"
-printf '# lpod-ondemand: {"port": 8000}\n[Socket]\nListenStream=8000\n' > "${XDG_CONFIG_HOME}/systemd/user/stry-ondemand.socket"
-lpod stry up --json && check '.ok'
-calls "systemctl --user start stry-ondemand.service" 1
-lpod stry restart --json && check '.ok'
-calls "systemctl --user restart stry-app.service" 1
-lpod stry down --json
+printf '# lpod-ondemand: {"port": 8000}\n[Socket]\nListenStream=8000\n' > "${XDG_CONFIG_HOME}/systemd/user/demo-ondemand.socket"
+lpod demo up --json && check '.ok'
+calls "systemctl --user start demo-ondemand.service" 1
+lpod demo restart --json && check '.ok'
+calls "systemctl --user restart demo-app.service" 1
+lpod demo down --json
 forget_calls
-lpod stry restart --json && check '.ok'
-calls "systemctl --user start stry-ondemand.service" 1
-calls_like "^systemctl .*(start|restart) stry-app.service" 0
+lpod demo restart --json && check '.ok'
+calls "systemctl --user start demo-ondemand.service" 1
+calls_like "^systemctl .*(start|restart) demo-app.service" 0
 
 test_case "APP redeploy pulls every image from a registry, then restarts the main unit"
-lpod stry redeploy --json && check '.ok'
-calls "podman pull --quiet -- ghcr.io/francoism90/stry:4" 1
+lpod demo redeploy --json && check '.ok'
+calls "podman pull --quiet -- ghcr.io/example/demo:4" 1
 calls "podman pull --quiet -- docker.io/library/valkey:9" 1
-holds "redeploy didn't restart the main unit last" test "$(tail -n 1 "$LPOD_TEST_LOG")" == "systemctl --user restart stry-app.service"
+holds "redeploy didn't restart the main unit last" test "$(tail -n 1 "$LPOD_TEST_LOG")" == "systemctl --user restart demo-app.service"
 
 test_case "APP redeploy skips images built on the host, and stops at a failed pull"
-jq 'map(if .Names[0] == "stry-valkey" then .Image = "localhost/valkey:dev" else . end)' "${LPOD_TEST_HOST}/ps.json" > "${WORK}/ps.json"
+jq 'map(if .Names[0] == "demo-valkey" then .Image = "localhost/valkey:dev" else . end)' "${LPOD_TEST_HOST}/ps.json" > "${WORK}/ps.json"
 mv "${WORK}/ps.json" "${LPOD_TEST_HOST}/ps.json"
-lpod stry redeploy --json && check '.ok'
+lpod demo redeploy --json && check '.ok'
 calls_like "^podman pull" 1
 calls_like "^podman pull .*localhost" 0
-jq 'map(if .Names[0] == "stry-valkey" then .Image = "docker.io/library/missing:1" else . end)' "${LPOD_TEST_HOST}/ps.json" > "${WORK}/ps.json"
+jq 'map(if .Names[0] == "demo-valkey" then .Image = "docker.io/library/missing:1" else . end)' "${LPOD_TEST_HOST}/ps.json" > "${WORK}/ps.json"
 mv "${WORK}/ps.json" "${LPOD_TEST_HOST}/ps.json"
 forget_calls
-lpod_status stry redeploy --json
+lpod_status demo redeploy --json
 exited_with 1
 said "manifest unknown"
 calls_like "^systemctl .*restart" 0
 
 test_case "APP redeploy --no-block hands the work to a transient unit"
-lpod stry redeploy --no-block --json && check '.ok'
-calls_like "^systemd-run --quiet --collect --no-block --user --unit lpod-redeploy-stry /.+ stry redeploy --json$" 1
+lpod demo redeploy --no-block --json && check '.ok'
+calls_like "^systemd-run --quiet --collect --no-block --user --unit lpod-redeploy-demo /.+ demo redeploy --json$" 1
 calls_like "^(podman pull|systemctl .*restart)" 0
 
 HELLO='{"files": [
@@ -595,7 +595,7 @@ INSTALLED="${XDG_CONFIG_HOME}/containers/systemd"
 test_case "quadlet check lists the units the files generate, next to the installed Quadlets"
 mkdir -p "$INSTALLED"
 printf '[Container]\nImagee=docker.io/library/broken\n' > "${INSTALLED}/broken.container"
-printf '[Container]\nImage=docker.io/library/valkey:9\n' > "${INSTALLED}/stry-valkey.container"
+printf '[Container]\nImage=docker.io/library/valkey:9\n' > "${INSTALLED}/demo-valkey.container"
 lpod quadlet check --stdin --json <<< "$HELLO"
 check '. == {"contract": 1, "valid": true, "errors": [], "units": ["hello.service", "hello-data-volume.service"]}'
 keeps_contract quadlet-check '.'
@@ -604,8 +604,8 @@ holds "quadlet check left its files with the installed Quadlets" test ! -e "${IN
 
 test_case "quadlet check finds the installed Quadlets the files refer to"
 mkdir -p "$INSTALLED"
-printf '[Network]\n' > "${INSTALLED}/stry.network"
-lpod quadlet check --stdin --json <<< '{"files": [{"name": "hello.container", "content": "[Container]\nImage=docker.io/library/hello-world\nNetwork=stry.network\n"}]}'
+printf '[Network]\n' > "${INSTALLED}/demo.network"
+lpod quadlet check --stdin --json <<< '{"files": [{"name": "hello.container", "content": "[Container]\nImage=docker.io/library/hello-world\nNetwork=demo.network\n"}]}'
 check '.valid and .units == ["hello.service"]'
 lpod quadlet check --stdin --json <<< '{"files": [{"name": "hello.container", "content": "[Container]\nImage=docker.io/library/hello-world\nNetwork=gone.network\n"}]}'
 check '.valid == false and .errors == ["hello.container: requested Quadlet gone.network was not found"]'
@@ -728,25 +728,25 @@ lpod_status quadlet fetch https://example.test/bare.git --ref main --depth 1 --j
 exited_with 1
 said "Unknown option: --depth"
 
-DROPINS="${LPOD_TEST_HOST}/quadlets/stry-app.container.d"
+DROPINS="${LPOD_TEST_HOST}/quadlets/demo-app.container.d"
 
 test_case "APP files write writes a drop-in next to the application's Quadlet, and reloads systemd"
-lpod stry files write stry-app.container.d/memory.conf --stdin --json < <(printf '[Container]\nMemory=1g')
-check ". == {\"contract\": 1, \"file\": {\"name\": \"stry-app.container.d/memory.conf\", \"path\": \"${DROPINS}/memory.conf\", \"content\": \"[Container]\\nMemory=1g\"}}"
+lpod demo files write demo-app.container.d/memory.conf --stdin --json < <(printf '[Container]\nMemory=1g')
+check ". == {\"contract\": 1, \"file\": {\"name\": \"demo-app.container.d/memory.conf\", \"path\": \"${DROPINS}/memory.conf\", \"content\": \"[Container]\\nMemory=1g\"}}"
 keeps_contract app-files-write '.file'
 holds "the drop-in isn't readable by everyone" test "$(stat -c %a "${DROPINS}/memory.conf")" == 644
 calls "systemctl --user daemon-reload" 1
-lpod stry files write stry-app.container.d/memory.conf --stdin --json < <(printf '[Container]\nMemory=2g\n')
+lpod demo files write demo-app.container.d/memory.conf --stdin --json < <(printf '[Container]\nMemory=2g\n')
 check '.file.content == "[Container]\nMemory=2g\n"'
 holds "a temporary file was left behind" test -z "$(find "$DROPINS" -name '.lpod-write.*')"
-lpod stry files --json
-check 'any(.files[]; .name == "stry-app.container.d/memory.conf" and .content == "[Container]\nMemory=2g\n")'
+lpod demo files --json
+check 'any(.files[]; .name == "demo-app.container.d/memory.conf" and .content == "[Container]\nMemory=2g\n")'
 
 test_case "APP files write takes up to 256 KiB, and leaves nothing behind when it's more"
-lpod stry files write stry-app.container.d/big.conf --stdin --json < <(head -c 262144 /dev/zero | tr '\0' '#')
+lpod demo files write demo-app.container.d/big.conf --stdin --json < <(head -c 262144 /dev/zero | tr '\0' '#')
 check '(.file.content | length) == 262144'
 forget_calls
-lpod_status stry files write stry-app.container.d/bigger.conf --stdin --json < <(head -c 262145 /dev/zero | tr '\0' '#')
+lpod_status demo files write demo-app.container.d/bigger.conf --stdin --json < <(head -c 262145 /dev/zero | tr '\0' '#')
 exited_with 1
 said "A drop-in can be 256 KiB at most."
 holds "a drop-in over 256 KiB was left behind" test -z "$(find "$DROPINS" -name 'bigger.conf' -o -name '.lpod-write.*')"
@@ -754,42 +754,42 @@ calls "systemctl --user daemon-reload" 0
 
 test_case "APP files write and remove refuse a name that isn't a drop-in of the application, or is lpod's own"
 mkdir -p "${WORK}/elsewhere"
-ln -sfn "${WORK}/elsewhere" "${LPOD_TEST_HOST}/quadlets/stry-valkey.container.d"
+ln -sfn "${WORK}/elsewhere" "${LPOD_TEST_HOST}/quadlets/demo-valkey.container.d"
 
-for NAME in stry-app.container.d/lpod-ondemand.conf stry-app.container.d/../../x.conf stry-app.container.d/sub/x.conf \
-    stry-app.container.d/x.txt stry-app.container.d/.x.conf glance.container.d/x.conf stry-valkey.container.d/x.conf ../x.conf; do
-    lpod_status stry files write "$NAME" --stdin --json < <(printf '[Container]\n')
+for NAME in demo-app.container.d/lpod-ondemand.conf demo-app.container.d/../../x.conf demo-app.container.d/sub/x.conf \
+    demo-app.container.d/x.txt demo-app.container.d/.x.conf glance.container.d/x.conf demo-valkey.container.d/x.conf ../x.conf; do
+    lpod_status demo files write "$NAME" --stdin --json < <(printf '[Container]\n')
     exited_with 1
-    lpod_status stry files remove "$NAME" --json
+    lpod_status demo files remove "$NAME" --json
     exited_with 1
 done
 
-said "isn't a file of stry."
-lpod_status stry files write stry-app.container.d/lpod-timer.conf --stdin --json < <(printf '[Service]\n')
+said "isn't a file of demo."
+lpod_status demo files write demo-app.container.d/lpod-timer.conf --stdin --json < <(printf '[Service]\n')
 said "was written by lpod, so lpod's own command changes it."
-lpod_status stry files write stry-valkey.container.d/x.conf --stdin --json < <(printf '[Service]\n')
+lpod_status demo files write demo-valkey.container.d/x.conf --stdin --json < <(printf '[Service]\n')
 said "is a symlink, which lpod leaves alone."
 holds "a drop-in was written through a symlink" test -z "$(ls -A "${WORK}/elsewhere")"
 calls "systemctl --user daemon-reload" 0
 
 test_case "APP files write needs one name and stdin"
-lpod_status stry files write stry-app.container.d/memory.conf --json < <(printf '[Container]\n')
+lpod_status demo files write demo-app.container.d/memory.conf --json < <(printf '[Container]\n')
 exited_with 1
 said "Usage: lpod APP files write NAME --stdin --json"
-lpod_status stry files write stry-app.container.d/a.conf stry-app.container.d/b.conf --stdin --json < <(printf '[Container]\n')
+lpod_status demo files write demo-app.container.d/a.conf demo-app.container.d/b.conf --stdin --json < <(printf '[Container]\n')
 exited_with 1
 said "Write one drop-in at a time."
-lpod_status stry files write stry-app.container.d/a.conf --stdin --force --json < <(printf '[Container]\n')
+lpod_status demo files write demo-app.container.d/a.conf --stdin --force --json < <(printf '[Container]\n')
 exited_with 1
 said "Unknown option: --force"
 
 test_case "APP files remove removes Quadlets and drop-ins, and reloads systemd once"
 mkdir -p "$DROPINS"
 printf '[Container]\n' > "${DROPINS}/old.conf"
-lpod stry files remove stry-valkey.container stry-app.container.d/old.conf --json
-check '. == {"contract": 1, "removed": ["stry-valkey.container", "stry-app.container.d/old.conf"]}'
+lpod demo files remove demo-valkey.container demo-app.container.d/old.conf --json
+check '. == {"contract": 1, "removed": ["demo-valkey.container", "demo-app.container.d/old.conf"]}'
 keeps_contract app-files-remove '.'
-calls "podman quadlet rm --force -- stry-valkey.container" 1
+calls "podman quadlet rm --force -- demo-valkey.container" 1
 calls "systemctl --user daemon-reload" 1
 holds "old.conf is still there" test ! -e "${DROPINS}/old.conf"
 
@@ -797,34 +797,34 @@ test_case "APP files remove removes nothing when one name isn't the application'
 mkdir -p "$DROPINS"
 printf '[Container]\n' > "${DROPINS}/old.conf"
 
-for NAMES in "stry-app.container.d/old.conf glance.container" "stry-valkey.container stry-app.container.d/gone.conf" "stry-valkey.container stry-app.container.d/lpod-timer.conf"; do
+for NAMES in "demo-app.container.d/old.conf glance.container" "demo-valkey.container demo-app.container.d/gone.conf" "demo-valkey.container demo-app.container.d/lpod-timer.conf"; do
     # shellcheck disable=SC2086
-    lpod_status stry files remove $NAMES --json
+    lpod_status demo files remove $NAMES --json
     exited_with 1
 done
 
-lpod_status stry files remove --json
+lpod_status demo files remove --json
 exited_with 1
 said "Usage: lpod APP files remove NAME... --json"
 holds "old.conf was removed" test -f "${DROPINS}/old.conf"
 calls_like "^(podman quadlet rm|systemctl --user daemon-reload)" 0
 
-BACKUP_TIMER="${XDG_CONFIG_HOME}/systemd/user/stry-backup.timer"
+BACKUP_TIMER="${XDG_CONFIG_HOME}/systemd/user/demo-backup.timer"
 TIMERS='{"timers": [
-    {"name": "backup", "container": "stry-app", "on_calendar": ["daily", "Mon *-*-* 03:00"], "persistent": true, "randomized_delay_sec": "5min", "timeout_start_sec": "1h"},
-    {"name": "warm", "container": "stry-valkey", "on_calendar": "*:0/15"}
+    {"name": "backup", "container": "demo-app", "on_calendar": ["daily", "Mon *-*-* 03:00"], "persistent": true, "randomized_delay_sec": "5min", "timeout_start_sec": "1h"},
+    {"name": "warm", "container": "demo-valkey", "on_calendar": "*:0/15"}
 ]}'
 
 test_case "APP timers set writes a timer for each container, and enables and starts them"
-lpod stry timers set --stdin --json <<< "$TIMERS" && check '.ok'
-holds "stry-backup.timer isn't as expected: $(cat "$BACKUP_TIMER")" cmp -s "$BACKUP_TIMER" <(cat <<'EOF'
-# Written by "lpod stry timers set". See "Timers" in lpod's docs/commands.md.
-# lpod-timer: {"app":"stry","name":"backup","container":"stry-app","service":"stry-app.service","on_calendar":["daily","Mon *-*-* 03:00"],"persistent":true,"randomized_delay_sec":"5min","timeout_start_sec":"1h"}
+lpod demo timers set --stdin --json <<< "$TIMERS" && check '.ok'
+holds "demo-backup.timer isn't as expected: $(cat "$BACKUP_TIMER")" cmp -s "$BACKUP_TIMER" <(cat <<'EOF'
+# Written by "lpod demo timers set". See "Timers" in lpod's docs/commands.md.
+# lpod-timer: {"app":"demo","name":"backup","container":"demo-app","service":"demo-app.service","on_calendar":["daily","Mon *-*-* 03:00"],"persistent":true,"randomized_delay_sec":"5min","timeout_start_sec":"1h"}
 [Unit]
-Description=stry backup timer
+Description=demo backup timer
 
 [Timer]
-Unit=stry-app.service
+Unit=demo-app.service
 OnCalendar=daily
 OnCalendar=Mon *-*-* 03:00
 Persistent=true
@@ -834,85 +834,85 @@ RandomizedDelaySec=5min
 WantedBy=timers.target
 EOF
 )
-holds "stry-warm.timer has directives it wasn't given" test "$(grep -cE '^(Persistent|RandomizedDelaySec)=' "${XDG_CONFIG_HOME}/systemd/user/stry-warm.timer")" -eq 0
-holds "the TimeoutStartSec drop-in isn't as expected" cmp -s "${DROPINS}/lpod-timer.conf" <(printf '# Written by "lpod stry timers set". See "Timers" in lpod'"'"'s docs/commands.md.\n[Service]\nTimeoutStartSec=1h\n')
-holds "stry-valkey got a drop-in without a timeout" test ! -e "${LPOD_TEST_HOST}/quadlets/stry-valkey.container.d"
+holds "demo-warm.timer has directives it wasn't given" test "$(grep -cE '^(Persistent|RandomizedDelaySec)=' "${XDG_CONFIG_HOME}/systemd/user/demo-warm.timer")" -eq 0
+holds "the TimeoutStartSec drop-in isn't as expected" cmp -s "${DROPINS}/lpod-timer.conf" <(printf '# Written by "lpod demo timers set". See "Timers" in lpod'"'"'s docs/commands.md.\n[Service]\nTimeoutStartSec=1h\n')
+holds "demo-valkey got a drop-in without a timeout" test ! -e "${LPOD_TEST_HOST}/quadlets/demo-valkey.container.d"
 calls "systemctl --user daemon-reload" 1
-calls "systemctl --user enable stry-backup.timer stry-warm.timer" 1
-calls "systemctl --user restart stry-backup.timer stry-warm.timer" 1
-lpod stry timers --json
+calls "systemctl --user enable demo-backup.timer demo-warm.timer" 1
+calls "systemctl --user restart demo-backup.timer demo-warm.timer" 1
+lpod demo timers --json
 check '[.timers[] | {name, container, service, on_calendar}] == [
-    {"name": "backup", "container": "stry-app", "service": "stry-app.service", "on_calendar": ["daily", "Mon *-*-* 03:00"]},
-    {"name": "warm", "container": "stry-valkey", "service": "stry-valkey.service", "on_calendar": ["*:0/15"]}
+    {"name": "backup", "container": "demo-app", "service": "demo-app.service", "on_calendar": ["daily", "Mon *-*-* 03:00"]},
+    {"name": "warm", "container": "demo-valkey", "service": "demo-valkey.service", "on_calendar": ["*:0/15"]}
 ]'
 keeps_contract app-timers '.timers[0]'
 
 test_case "APP timers set replaces the timers, and remove removes them with their drop-ins"
-lpod stry timers set --stdin --json <<< "$TIMERS"
+lpod demo timers set --stdin --json <<< "$TIMERS"
 forget_calls
-lpod stry timers set --stdin --json <<< '{"timers": [{"name": "warm", "container": "stry-valkey", "on_calendar": "hourly"}]}' && check '.ok'
-calls "systemctl --user disable --now stry-backup.timer" 1
-holds "stry-backup.timer is still there" test ! -e "$BACKUP_TIMER"
+lpod demo timers set --stdin --json <<< '{"timers": [{"name": "warm", "container": "demo-valkey", "on_calendar": "hourly"}]}' && check '.ok'
+calls "systemctl --user disable --now demo-backup.timer" 1
+holds "demo-backup.timer is still there" test ! -e "$BACKUP_TIMER"
 holds "the timer's drop-in directory is still there" test ! -e "$DROPINS"
-holds "stry-warm.timer wasn't replaced" grep -qx 'OnCalendar=hourly' "${XDG_CONFIG_HOME}/systemd/user/stry-warm.timer"
-lpod stry timers remove --json && check '.ok'
-calls "systemctl --user disable --now stry-warm.timer" 2
-lpod stry timers --json
+holds "demo-warm.timer wasn't replaced" grep -qx 'OnCalendar=hourly' "${XDG_CONFIG_HOME}/systemd/user/demo-warm.timer"
+lpod demo timers remove --json && check '.ok'
+calls "systemctl --user disable --now demo-warm.timer" 2
+lpod demo timers --json
 check '.timers == []'
-lpod stry timers set --stdin --json <<< '{"timers": []}' && check '.ok'
+lpod demo timers set --stdin --json <<< '{"timers": []}' && check '.ok'
 calls_like "^systemctl --user enable" 1
 
 test_case "APP timers run starts the timer's service without waiting"
-lpod stry timers run backup --json && check '.ok'
-calls "systemctl --user --no-block start stry-app.service" 1
-lpod_status stry timers run ghost --json
+lpod demo timers run backup --json && check '.ok'
+calls "systemctl --user --no-block start demo-app.service" 1
+lpod_status demo timers run ghost --json
 exited_with 1
-said "stry has no timer named ghost."
+said "demo has no timer named ghost."
 
 test_case "APP timers set refuses timers it can't write, and changes nothing"
-printf '[Timer]\nOnCalendar=daily\n' > "${XDG_CONFIG_HOME}/systemd/user/stry-nightly.timer"
+printf '[Timer]\nOnCalendar=daily\n' > "${XDG_CONFIG_HOME}/systemd/user/demo-nightly.timer"
 cp "$BACKUP_TIMER" "${WORK}/backup.timer"
 
 while IFS= read -r TIMER; do
-    lpod_status stry timers set --stdin --json <<< "{\"timers\": [${TIMER}]}"
+    lpod_status demo timers set --stdin --json <<< "{\"timers\": [${TIMER}]}"
     exited_with 1
 done <<'EOF'
-{"name": "Backup", "container": "stry-app", "on_calendar": "daily"}
-{"name": "../x", "container": "stry-app", "on_calendar": "daily"}
-{"name": "backup", "container": "stry-app"}
-{"name": "backup", "container": "stry-app", "on_calendar": []}
-{"name": "backup", "container": "stry-app", "on_calendar": "daily\nExecStart=/bin/sh"}
+{"name": "Backup", "container": "demo-app", "on_calendar": "daily"}
+{"name": "../x", "container": "demo-app", "on_calendar": "daily"}
+{"name": "backup", "container": "demo-app"}
+{"name": "backup", "container": "demo-app", "on_calendar": []}
+{"name": "backup", "container": "demo-app", "on_calendar": "daily\nExecStart=/bin/sh"}
 {"name": "backup", "container": "glance", "on_calendar": "daily"}
-{"name": "backup", "container": "stry-app", "on_calendar": "daily"}, {"name": "backup", "container": "stry-valkey", "on_calendar": "daily"}
-{"name": "a", "container": "stry-app", "on_calendar": "daily"}, {"name": "b", "container": "stry-app", "on_calendar": "daily"}
-{"name": "idle", "container": "stry-app", "on_calendar": "daily"}
-{"name": "backup", "container": "stry-app", "on_calendar": "every tuesday"}
-{"name": "backup", "container": "stry-app", "on_calendar": "-h"}
-{"name": "backup", "container": "stry-app", "on_calendar": "daily", "persistent": "yes"}
-{"name": "backup", "container": "stry-app", "on_calendar": "daily", "randomized_delay_sec": "5parsecs"}
-{"name": "backup", "container": "stry-app", "on_calendar": "daily", "timeout_start_sec": "1h; rm -rf"}
-{"name": "nightly", "container": "stry-app", "on_calendar": "daily"}
+{"name": "backup", "container": "demo-app", "on_calendar": "daily"}, {"name": "backup", "container": "demo-valkey", "on_calendar": "daily"}
+{"name": "a", "container": "demo-app", "on_calendar": "daily"}, {"name": "b", "container": "demo-app", "on_calendar": "daily"}
+{"name": "idle", "container": "demo-app", "on_calendar": "daily"}
+{"name": "backup", "container": "demo-app", "on_calendar": "every tuesday"}
+{"name": "backup", "container": "demo-app", "on_calendar": "-h"}
+{"name": "backup", "container": "demo-app", "on_calendar": "daily", "persistent": "yes"}
+{"name": "backup", "container": "demo-app", "on_calendar": "daily", "randomized_delay_sec": "5parsecs"}
+{"name": "backup", "container": "demo-app", "on_calendar": "daily", "timeout_start_sec": "1h; rm -rf"}
+{"name": "nightly", "container": "demo-app", "on_calendar": "daily"}
 EOF
 
-said "stry-nightly.timer is already there, and lpod timers didn't write it."
-lpod_status stry timers set --stdin --json < <(jq -n '{timers: [range(21) | {name: "t\(.)", container: "stry-app", on_calendar: "daily"}]}')
+said "demo-nightly.timer is already there, and lpod timers didn't write it."
+lpod_status demo timers set --stdin --json < <(jq -n '{timers: [range(21) | {name: "t\(.)", container: "demo-app", on_calendar: "daily"}]}')
 exited_with 1
 said "At most 20 timers."
-lpod_status stry timers set --stdin --json <<< 'not json'
+lpod_status demo timers set --stdin --json <<< 'not json'
 exited_with 1
-lpod_status stry timers set --json <<< "$TIMERS"
+lpod_status demo timers set --json <<< "$TIMERS"
 exited_with 1
 said "--stdin"
-holds "a refused set changed stry-backup.timer" cmp -s "$BACKUP_TIMER" "${WORK}/backup.timer"
+holds "a refused set changed demo-backup.timer" cmp -s "$BACKUP_TIMER" "${WORK}/backup.timer"
 calls_like "^systemctl --user (daemon-reload|enable|restart|disable)" 0
 calls_like "^systemd-analyze calendar -- -h" 0
 
 test_case "APP remove removes the application's Quadlets after its timers, and nothing else unless asked"
-lpod stry remove --json && check '.ok'
-calls "podman quadlet rm --force --recursive -- stry" 1
+lpod demo remove --json && check '.ok'
+calls "podman quadlet rm --force --recursive -- demo" 1
 calls_like "^podman (volume|image|secret) rm" 0
-holds "the timers weren't removed before the Quadlets" test "$(grep -n 'disable --now stry-backup.timer' "$LPOD_TEST_LOG" | cut -d: -f1)" -lt "$(grep -n 'quadlet rm' "$LPOD_TEST_LOG" | cut -d: -f1)"
-holds "stry-backup.timer is still there" test ! -e "$BACKUP_TIMER"
+holds "the timers weren't removed before the Quadlets" test "$(grep -n 'disable --now demo-backup.timer' "$LPOD_TEST_LOG" | cut -d: -f1)" -lt "$(grep -n 'quadlet rm' "$LPOD_TEST_LOG" | cut -d: -f1)"
+holds "demo-backup.timer is still there" test ! -e "$BACKUP_TIMER"
 
 test_case "APP remove removes a lone Quadlet by its file name"
 lpod glance remove --json && check '.ok'
@@ -920,20 +920,20 @@ calls "podman quadlet rm --force -- glance.container" 1
 lpod_status ghost remove --json
 exited_with 1
 said "No application or Quadlet named ghost is installed."
-lpod_status stry remove --everything --json
+lpod_status demo remove --everything --json
 exited_with 1
 said "Unknown option: --everything"
 
 test_case "APP remove --volumes --images keeps what another application uses, however it's written"
-lpod stry remove --volumes --images --json && check '.ok'
-calls "podman volume rm -- stry-data" 1
-calls "podman image rm -- ghcr.io/francoism90/stry:4" 1
+lpod demo remove --volumes --images --json && check '.ok'
+calls "podman volume rm -- demo-data" 1
+calls "podman image rm -- ghcr.io/example/demo:4" 1
 calls "podman image rm -- docker.io/library/valkey:9" 1
-printf '%s\n' '[Container]' 'Image = "docker.io/library/valkey:9"' 'Mount=type=volume,source=stry-data.volume,target=/data' >> "${LPOD_TEST_HOST}/quadlets/glance.container"
+printf '%s\n' '[Container]' 'Image = "docker.io/library/valkey:9"' 'Mount=type=volume,source=demo-data.volume,target=/data' >> "${LPOD_TEST_HOST}/quadlets/glance.container"
 forget_calls
-lpod stry remove --volumes --images --json && check '.ok'
+lpod demo remove --volumes --images --json && check '.ok'
 calls_like "^podman (volume|image) rm" 1
-calls "podman image rm -- ghcr.io/francoism90/stry:4" 1
+calls "podman image rm -- ghcr.io/example/demo:4" 1
 
 # Installs "shop" for the on-demand tests: its main container, the database
 # it needs, a worker (as the container shop-worker) and a scheduler...
@@ -1091,9 +1091,9 @@ calls_like "^systemctl --user (daemon-reload|enable|start)" 0
 
 test_case "names that could be options or paths are refused before podman runs"
 
-for ARGS in "container -rf restart" "container ../stry-app inspect" "volume rm --all" "volume rm ../stry-data" \
+for ARGS in "container -rf restart" "container ../demo-app inspect" "volume rm --all" "volume rm ../demo-data" \
     "volume export --all" "network rm -f" "secret rm --all" "secret create ../db --stdin" \
-    "image pull --all-tags" "image pull ../x" "image rm --force" "image rm stry"; do
+    "image pull --all-tags" "image pull ../x" "image rm --force" "image rm demo"; do
     forget_calls
     # shellcheck disable=SC2086
     lpod_status $ARGS --json < /dev/null
@@ -1129,7 +1129,7 @@ calls_like "--host" 0
 test_case "APP remove passes names after --, and only removes the plain ones no one else uses"
 add_quadlet evil-app.container evil "$(printf '%s\n' '[Container]' \
     'Image=--all' 'Image=docker.io/library/valkey:9' 'Image=docker.io/library/alpine:3' \
-    'Volume=-rf:/srv' 'Volume=evil-data:/data' 'Volume=stry-data.volume:/shared' \
+    'Volume=-rf:/srv' 'Volume=evil-data:/data' 'Volume=demo-data.volume:/shared' \
     'Secret=--all,type=env' 'Secret=evil-key,type=env')"
 lpod evil remove --volumes --images --secrets --json && check '.ok'
 calls "podman quadlet rm --force --recursive -- evil" 1
@@ -1143,7 +1143,7 @@ test_case "quadlet fetch refuses a URL, branch or directory that git would read 
 
 for ARGS in "file:///etc --ref main" "/etc --ref main" "ext::sh --ref main" "--upload-pack=touch --ref main" \
     "https://example.test/apps.git --ref --upload-pack=touch" "https://example.test/apps.git --ref main..x" \
-    "https://example.test/apps.git --ref main --path ../etc" "https://example.test/apps.git --ref main --path stry/../.." \
+    "https://example.test/apps.git --ref main --path ../etc" "https://example.test/apps.git --ref main --path demo/../.." \
     "https://example.test/apps.git --ref main --path /etc"; do
     forget_calls
     # shellcheck disable=SC2086
@@ -1156,27 +1156,27 @@ test_case "quadlet fetch never reads a file outside the repository, through a sy
 OUTSIDE="${WORK}/outside"
 REPOSITORY="${LPOD_TEST_HOST}/repositories/apps"
 rm -rf "$OUTSIDE"
-mkdir -p "${OUTSIDE}/apps" "${REPOSITORY}/stry" "${REPOSITORY}/nested"
+mkdir -p "${OUTSIDE}/apps" "${REPOSITORY}/demo" "${REPOSITORY}/nested"
 echo "the host's own file" > "${OUTSIDE}/secret"
 echo "the host's own file" > "${OUTSIDE}/apps/secret.container"
 printf 'name: root\n' > "${REPOSITORY}/pods.yml"
-printf '[Container]\nImage=ghcr.io/francoism90/stry:4\n' > "${REPOSITORY}/stry/stry.container"
-echo hidden > "${REPOSITORY}/stry/.env"
+printf '[Container]\nImage=ghcr.io/example/demo:4\n' > "${REPOSITORY}/demo/demo.container"
+echo hidden > "${REPOSITORY}/demo/.env"
 # Read a line at a time, this name would also be name.container in the
 # working directory, the home directory over SSH...
-echo newline > "${REPOSITORY}/stry/"$'evil\nname.container'
+echo newline > "${REPOSITORY}/demo/"$'evil\nname.container'
 echo "the host's own file" > "${HOME}/name.container"
-ln -s "${OUTSIDE}/secret" "${REPOSITORY}/stry/pods.yml"
-ln -s "${OUTSIDE}/secret" "${REPOSITORY}/stry/linked.container"
+ln -s "${OUTSIDE}/secret" "${REPOSITORY}/demo/pods.yml"
+ln -s "${OUTSIDE}/secret" "${REPOSITORY}/demo/linked.container"
 ln -s "$OUTSIDE" "${REPOSITORY}/linked"
-ln -s ../stry "${REPOSITORY}/nested/stry"
+ln -s ../demo "${REPOSITORY}/nested/demo"
 
-lpod quadlet fetch https://example.test/apps.git --ref main --path stry --json
-check '.commit == "abc1234" and ([.files[].name] == ["stry.container"])'
+lpod quadlet fetch https://example.test/apps.git --ref main --path demo --json
+check '.commit == "abc1234" and ([.files[].name] == ["demo.container"])'
 check '.manifest == "name: root\n" and .manifest_path == ""'
 calls_like "^git .*clone --quiet --depth 1 --branch main -- https://example.test/apps.git " 1
 
-for DIRECTORY in linked linked/apps nested/stry; do
+for DIRECTORY in linked linked/apps nested/demo; do
     lpod_status quadlet fetch https://example.test/apps.git --ref main --path "$DIRECTORY" --json
     exited_with 1
     said "${DIRECTORY} is not a directory in the repository."
@@ -1187,16 +1187,16 @@ cat > "${HOME}/.env" <<'EOF'
 $(touch pwned)
 APP_USER=$(touch pwned)
 LPOD_PODMAN_BINARY=/bin/false
-export APP_URL="https://stry.test" # the site
+export APP_URL="https://demo.test" # the site
 APP_PORT=8443 # the proxy's port
 EOF
-lpod stry open
-calls "xdg-open https://stry.test:8443" 1
-lpod stry export-cert "${HOME}/stry.crt"
-calls "podman cp systemd-stry:/data/caddy/pki/authorities/local/root.crt ${HOME}/stry.crt" 1
+lpod demo open
+calls "xdg-open https://demo.test:8443" 1
+lpod demo export-cert "${HOME}/demo.crt"
+calls "podman cp systemd-demo:/data/caddy/pki/authorities/local/root.crt ${HOME}/demo.crt" 1
 holds ".env ran a command" test ! -e "${HOME}/pwned"
 printf 'APP_URL=file:///etc/passwd\n' > "${HOME}/.env"
-lpod_status stry open
+lpod_status demo open
 exited_with 1
 said "Set APP_URL to an http:// or https:// address."
 calls_like "^xdg-open" 1

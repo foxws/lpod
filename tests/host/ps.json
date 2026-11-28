@@ -2,16 +2,16 @@
   {
     "Id": "1111111111111111111111111111111111111111111111111111111111111111",
     "Names": [
-      "stry-app"
+      "demo-app"
     ],
-    "Image": "ghcr.io/francoism90/stry:4",
+    "Image": "ghcr.io/example/demo:4",
     "ImageID": "c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3",
     "State": "running",
     "Status": "Up 2 hours (healthy)",
     "ExitCode": 0,
     "StartedAt": 1795000000,
     "Labels": {
-      "PODMAN_SYSTEMD_UNIT": "stry-app.service",
+      "PODMAN_SYSTEMD_UNIT": "demo-app.service",
       "io.containers.autoupdate": "registry"
     },
     "Ports": [
@@ -26,7 +26,7 @@
   {
     "Id": "2222222222222222222222222222222222222222222222222222222222222222",
     "Names": [
-      "stry-valkey"
+      "demo-valkey"
     ],
     "Image": "docker.io/library/valkey:9",
     "ImageID": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
@@ -35,7 +35,7 @@
     "ExitCode": 0,
     "StartedAt": 1795000000,
     "Labels": {
-      "PODMAN_SYSTEMD_UNIT": "stry-valkey.service",
+      "PODMAN_SYSTEMD_UNIT": "demo-valkey.service",
       "io.containers.autoupdate": "registry"
     }
   },
