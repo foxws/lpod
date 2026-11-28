@@ -10,8 +10,11 @@ import (
 	"github.com/foxws/lpod/internal/containers"
 	"github.com/foxws/lpod/internal/contract"
 	"github.com/foxws/lpod/internal/images"
+	"github.com/foxws/lpod/internal/networks"
 	"github.com/foxws/lpod/internal/podman"
 	"github.com/foxws/lpod/internal/pods"
+	"github.com/foxws/lpod/internal/quadlet"
+	"github.com/foxws/lpod/internal/volumes"
 )
 
 // newListing returns a "lpod NAME --json" command that prints what list
@@ -50,6 +53,12 @@ func newListings() []*cobra.Command {
 		}),
 		newListing("pods", "List the pods, with their applications and containers", func(ctx context.Context, client podman.Client) (any, error) {
 			return pods.List(ctx, client)
+		}),
+		newListing("volumes", "List the volumes, and the folders containers mount", func(ctx context.Context, client podman.Client) (any, error) {
+			return volumes.List(ctx, client, quadlet.SearchDirs(rootful()))
+		}),
+		newListing("networks", "List the networks, with what uses them", func(ctx context.Context, client podman.Client) (any, error) {
+			return networks.List(ctx, client, quadlet.SearchDirs(rootful()))
 		}),
 	}
 }

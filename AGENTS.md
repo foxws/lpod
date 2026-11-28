@@ -43,7 +43,7 @@ Follow the code around your change:
 lpod in Go is a rewrite from the ground up, not a translation of the bash script, following the plan in [#59](https://github.com/foxws/lpod/issues/59): rootless first, one command at a time, straight to `main`.
 
 - **Rewriting a command:** design it on its own merits, and fix what's wrong with the bash version (see "Found in phase 0" in #59) instead of carrying it over. The Go binary handles the command, and only then is the bash version removed.
-- **`tests/run.sh` is the reference:** it runs through the binary, and the Go version passes it. Where Go deliberately behaves differently, change the case (and the fixture, for a contract change) in the same PR, and say so under "Behavior changes, for the release notes".
+- **`tests/run.sh` is the reference:** it runs through the binary, and the Go version passes it. Where Go deliberately behaves differently, change the case (and the fixture, for a contract change) in the same PR, and say so under "Behavior changes, for the release notes". A case for what only Go gets right, while the bash version still ships, goes under `if [ -n "${LPOD_UNDER_TEST:-}" ]`.
 - **Dependencies:** prefer well-maintained modules over lpod's own logic, such as go-systemd and Podman's own packages. Build without cgo (`CGO_ENABLED=0`), so the binary stays static.
 - **Code copied from another project,** such as lerd, keeps that project's license notice at the top of the file, and is listed in `THIRD_PARTY_LICENSES.md` with the project, commit and license. A module added to `go.mod` is listed there too.
 - **Checks:** `gofmt`, `go vet`, golangci-lint (`.golangci.yml`), `govulncheck` and `go test -race ./...` all run in CI, next to shellcheck and `tests/run.sh`.

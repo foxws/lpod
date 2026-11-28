@@ -21,6 +21,9 @@
         "container_port": 8080,
         "protocol": "tcp"
       }
+    ],
+    "Networks": [
+      "demo"
     ]
   },
   {
@@ -37,7 +40,10 @@
     "Labels": {
       "PODMAN_SYSTEMD_UNIT": "demo-valkey.service",
       "io.containers.autoupdate": "registry"
-    }
+    },
+    "Networks": [
+      "demo"
+    ]
   },
   {
     "Id": "3333333333333333333333333333333333333333333333333333333333333333",
@@ -52,7 +58,10 @@
     "StartedAt": 1795000000,
     "Labels": {
       "PODMAN_SYSTEMD_UNIT": "glance.service"
-    }
+    },
+    "Networks": [
+      "podman"
+    ]
   },
   {
     "Id": "4444444444444444444444444444444444444444444444444444444444444444",
@@ -67,7 +76,10 @@
     "StartedAt": 0,
     "Labels": {},
     "Pod": "5555555555555555555555555555555555555555555555555555555555555555",
-    "PodName": "scratch-pod"
+    "PodName": "scratch-pod",
+    "Networks": [
+      "podman"
+    ]
   },
   {
     "Id": "6666666666666666666666666666666666666666666666666666666666666666",
@@ -91,6 +103,7 @@
         "container_port": 80,
         "protocol": "tcp"
       }
-    ]
+    ],
+    "Networks": []
   }
 ]

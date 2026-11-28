@@ -70,6 +70,51 @@ type Container struct {
 	Pod     string `json:"Pod"`
 	PodName string `json:"PodName"`
 	Ports   []Port `json:"Ports"`
+	// Networks are the networks the container is attached to. A pod's
+	// containers share its infra container's.
+	Networks []string `json:"Networks"`
+}
+
+// Mount is a volume or a folder mounted into a container, from "podman
+// container inspect".
+type Mount struct {
+	// Type is "volume" or "bind".
+	Type string `json:"Type"`
+	// Name is the volume's, and Source the folder or the volume's
+	// mountpoint on the host.
+	Name   string `json:"Name"`
+	Source string `json:"Source"`
+}
+
+// Inspected is the part of "podman container inspect" lpod reads.
+type Inspected struct {
+	ID     string  `json:"Id"`
+	Name   string  `json:"Name"`
+	Mounts []Mount `json:"Mounts"`
+}
+
+// Volume is a volume in "podman volume inspect --all".
+type Volume struct {
+	Name       string `json:"Name"`
+	Driver     string `json:"Driver"`
+	Mountpoint string `json:"Mountpoint"`
+	// Options has "type" and "device" for a volume backed by a device or
+	// an NFS share.
+	Options   map[string]string `json:"Options"`
+	Anonymous bool              `json:"Anonymous"`
+}
+
+// Network is a network in "podman network ls".
+type Network struct {
+	Name    string `json:"name"`
+	Driver  string `json:"driver"`
+	Subnets []struct {
+		Subnet  string `json:"subnet"`
+		Gateway string `json:"gateway"`
+	} `json:"subnets"`
+	DNSEnabled  bool `json:"dns_enabled"`
+	Internal    bool `json:"internal"`
+	IPv6Enabled bool `json:"ipv6_enabled"`
 }
 
 // Port is a port a container publishes on the host.
@@ -210,6 +255,32 @@ func (c Client) Containers(ctx context.Context) ([]Container, error) {
 	var containers []Container
 
 	return containers, c.json(ctx, &containers, "ps", "--all", "--format", "json")
+}
+
+// Inspect runs "podman container inspect" for the containers ids. It runs
+// nothing for none.
+func (c Client) Inspect(ctx context.Context, ids []string) ([]Inspected, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+
+	var inspected []Inspected
+
+	return inspected, c.json(ctx, &inspected, append([]string{"container", "inspect", "--"}, ids...)...)
+}
+
+// Volumes runs "podman volume inspect --all".
+func (c Client) Volumes(ctx context.Context) ([]Volume, error) {
+	var volumes []Volume
+
+	return volumes, c.json(ctx, &volumes, "volume", "inspect", "--all")
+}
+
+// Networks runs "podman network ls".
+func (c Client) Networks(ctx context.Context) ([]Network, error) {
+	var networks []Network
+
+	return networks, c.json(ctx, &networks, "network", "ls", "--format", "json")
 }
 
 // Pods runs "podman pod ps".

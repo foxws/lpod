@@ -228,3 +228,43 @@ func TestByUnit(t *testing.T) {
 		t.Errorf("got %v", units)
 	}
 }
+
+func TestInspect(t *testing.T) {
+	client := Client{Binary: "podman", Run: answer("podman container inspect -- 1111 2222",
+		`[{"Id": "1111", "Name": "demo-app", "Mounts": [{"Type": "volume", "Name": "demo-data", "Source": "/volumes/demo-data/_data"}]}, {"Id": "2222", "Name": "demo-valkey"}]`)}
+
+	inspected, err := client.Inspect(context.Background(), []string{"1111", "2222"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(inspected) != 2 || inspected[0].Mounts[0].Name != "demo-data" {
+		t.Errorf("got %+v", inspected)
+	}
+}
+
+func TestInspectRunsNothingForNone(t *testing.T) {
+	client := Client{Binary: "podman", Run: func(context.Context, string, ...string) ([]byte, error) {
+		t.Error("ran podman")
+
+		return nil, nil
+	}}
+
+	if inspected, err := client.Inspect(context.Background(), nil); inspected != nil || err != nil {
+		t.Errorf("got %v and %v", inspected, err)
+	}
+}
+
+func TestVolumesAndNetworks(t *testing.T) {
+	volumes, err := Client{Binary: "podman", Run: answer("podman volume inspect --all",
+		`[{"Name": "media", "Driver": "local", "Options": {"type": "nfs", "device": "nas:/media"}}]`)}.Volumes(context.Background())
+	if err != nil || volumes[0].Options["device"] != "nas:/media" {
+		t.Errorf("got %+v and %v", volumes, err)
+	}
+
+	networks, err := Client{Binary: "podman", Run: answer("podman network ls --format json",
+		`[{"name": "demo", "driver": "bridge", "subnets": [{"subnet": "10.89.0.0/24", "gateway": "10.89.0.1"}], "dns_enabled": true}]`)}.Networks(context.Background())
+	if err != nil || networks[0].Subnets[0].Gateway != "10.89.0.1" || !networks[0].DNSEnabled {
+		t.Errorf("got %+v and %v", networks, err)
+	}
+}

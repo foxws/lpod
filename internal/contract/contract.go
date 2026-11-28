@@ -184,6 +184,60 @@ type Pod struct {
 	CreatedAt Time     `json:"created_at"`
 }
 
+// Volumes is what "lpod volumes --json" prints (volumes.json).
+type Volumes struct {
+	Contract int      `json:"contract"`
+	Volumes  []Volume `json:"volumes"`
+}
+
+// Volume is a volume, or a folder of the host that containers mount.
+type Volume struct {
+	// Name is the volume's, or the folder's path for a bind mount.
+	Name string `json:"name"`
+	// Quadlet is the .volume that creates it, or the .container that
+	// names it in Volume=, or null.
+	Quadlet *string `json:"quadlet"`
+	Driver  string  `json:"driver"`
+	// Mountpoint is where it is on the host, or the device or NFS share
+	// that backs it.
+	Mountpoint string `json:"mountpoint"`
+	// Size is always null here: "lpod volumes sizes --json" works it out.
+	Size *int64 `json:"size"`
+	// Type is "named", "anonymous", "device", "nfs" or "bind".
+	Type string `json:"type"`
+	// Containers are the names of the containers that mount it, and
+	// Applications their applications.
+	Containers   []string `json:"containers"`
+	Applications []string `json:"applications"`
+}
+
+// Networks is what "lpod networks --json" prints (networks.json).
+type Networks struct {
+	Contract int       `json:"contract"`
+	Networks []Network `json:"networks"`
+}
+
+// Network is a Podman network.
+type Network struct {
+	Name string `json:"name"`
+	// Quadlet is the .network that creates it, or null.
+	Quadlet *string `json:"quadlet"`
+	Driver  string  `json:"driver"`
+	// Subnet and Gateway are its first subnet's, or null.
+	Subnet   *string `json:"subnet"`
+	Gateway  *string `json:"gateway"`
+	DNS      bool    `json:"dns"`
+	Internal bool    `json:"internal"`
+	IPv6     bool    `json:"ipv6"`
+	// Containers counts the containers attached to it.
+	Containers int `json:"containers"`
+	// Applications are the applications whose containers are attached to
+	// it, or whose Quadlets name it in Network=.
+	Applications []string `json:"applications"`
+	// Default is Podman's own network, "podman".
+	Default bool `json:"default"`
+}
+
 // OK is what a --json command that only changes something prints.
 type OK struct {
 	Contract int  `json:"contract"`

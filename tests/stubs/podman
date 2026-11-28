@@ -11,6 +11,11 @@ function inspect_containers {
     local FORMAT="$1"
     shift
 
+    # The names may come after "--", as they do from lpod in Go...
+    if [ "${1:-}" == "--" ]; then
+        shift
+    fi
+
     # A container is asked for by its name, or its ID or the start of it...
     # shellcheck disable=SC2016
     local MATCHES='. as $container | $wanted | (. == $container.Name) or ($container.Id | startswith($wanted))'
