@@ -1729,6 +1729,13 @@ function cmd_app_ondemand_enable {
         echo "Description=${APP_NAME} on-demand proxy"
         echo "Requires=${MAIN_UNIT} ${SOCKET}"
         echo "After=${MAIN_UNIT} ${SOCKET}"
+
+        # The idle check stops the workers, so every wake starts them again,
+        # without the first request waiting for them...
+        if [ ${#WORKER_SERVICES[@]} -gt 0 ]; then
+            echo "Wants=${WORKER_SERVICES[*]}"
+        fi
+
         echo
         echo "[Service]"
         echo "ExecStart=${PROXYD} --exit-idle-time=${IDLE_TIMEOUT} 127.0.0.1:${LOCAL_PORT}"

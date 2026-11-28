@@ -195,7 +195,7 @@ Setting the timers replaces the ones the application had, and an empty list remo
 | File | Role |
 | --- | --- |
 | `APP-ondemand.socket` | Listens on `--port` (on the `--listen` address only, when given), and starts the proxy on the first connection |
-| `APP-ondemand.service` | `systemd-socket-proxyd`: starts the app, forwards to `127.0.0.1` on `--port` + 10000, and exits after `--idle-timeout` without connections |
+| `APP-ondemand.service` | `systemd-socket-proxyd`: starts the app and the `--worker` services (without waiting for them), forwards to `127.0.0.1` on `--port` + 10000, and exits after `--idle-timeout` without connections |
 | `lpod-ondemand.conf` for the main unit | Publishes the app's `--app-port` only on `127.0.0.1` on `--port` + 10000, stops it from starting at boot, and lets it stop once the proxy is gone (`StopWhenUnneeded=yes`) |
 | `APP-idle.service`, `APP-idle.timer` | With `--worker`: every minute, once the app is asleep, the scheduler isn't running and the `--idle-command` succeeds, stops the workers, so the services they need can sleep too |
 | `SCHEDULE.timer`, `lpod-ondemand.conf` for the scheduler | With `--schedule`: turns the scheduler container into a oneshot that only runs at the `--schedule-at` minutes |
@@ -218,7 +218,7 @@ lpod hello ondemand enable --json \
 | `--app-port PORT` | The port the app listens on inside its container |
 | `--listen ADDRESS` | The IP address the socket listens on, such as `127.0.0.1` to keep the app on this machine only, like `cockpit.socket` |
 | `--idle-timeout SPAN` | How long the proxy waits without connections before the app stops (default `10min`) |
-| `--worker NAME` | A container Quadlet of the app that keeps running after the app stops, such as a queue worker. Repeat it for more. The idle check stops them |
+| `--worker NAME` | A container Quadlet of the app that keeps running after the app stops, such as a queue worker. Repeat it for more. The idle check stops them, and the next wake (a request or `lpod APP up`) starts them again |
 | `--idle-container NAME`, `--idle-command CMD` | The command the idle check runs in that container with `podman exec`. It succeeds when there's no work left. The command is split on whitespace, without quotes |
 | `--idle-user USER` | The user `podman exec` runs the idle command as |
 | `--schedule NAME` | The scheduler's container Quadlet |

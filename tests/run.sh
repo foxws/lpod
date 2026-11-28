@@ -946,6 +946,7 @@ matches_golden ondemand/minimal/media-ondemand.socket "${UNIT_DIR}/media-ondeman
 matches_golden ondemand/minimal/media-ondemand.service "${UNIT_DIR}/media-ondemand.service"
 matches_golden ondemand/minimal/media.pod.d/lpod-ondemand.conf "${LPOD_TEST_HOST}/quadlets/media.pod.d/lpod-ondemand.conf"
 holds "an idle check was written without workers" test ! -e "${UNIT_DIR}/media-idle.service"
+holds "the proxy wants workers it doesn't have" test "$(grep -c '^Wants=' "${UNIT_DIR}/media-ondemand.service")" -eq 0
 calls_like "^systemctl --user start .*timer" 0
 lpod media ondemand enable --port 9000 --app-port 80 --listen ::1 --json
 holds "the socket doesn't listen on [::1]:9000" grep -qx 'ListenStream=\[::1\]:9000' "${UNIT_DIR}/media-ondemand.socket"
