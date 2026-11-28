@@ -8,6 +8,7 @@ package systemd
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -121,4 +122,21 @@ func (c Client) Linger(ctx context.Context, user string) (bool, error) {
 	}
 
 	return false, ErrUnknown
+}
+
+// UnitDir is where lpod writes units and drop-ins of its own, such as
+// podman-auto-update.timer.d/lpod-schedule.conf: the system's directory as
+// root, and else the user's.
+func UnitDir(rootful bool, getenv func(string) string) string {
+	if rootful {
+		return "/etc/systemd/system"
+	}
+
+	// The XDG spec says to ignore a relative XDG_CONFIG_HOME...
+	config := getenv("XDG_CONFIG_HOME")
+	if !filepath.IsAbs(config) {
+		config = filepath.Join(getenv("HOME"), ".config")
+	}
+
+	return filepath.Join(config, "systemd", "user")
 }

@@ -4,6 +4,7 @@ import (
 	"io"
 	"os"
 	"slices"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -29,7 +30,7 @@ func newRoot(stdout io.Writer) *cobra.Command {
 
 	root.SetOut(stdout)
 	root.SetVersionTemplate("lpod {{.Version}}\n")
-	root.AddCommand(newVersion(), newHost(), newAutoUpdate(), newEvents(), newJournal())
+	root.AddCommand(newVersion(), newHost(), newAutoUpdate(), newEvents(), newJournal(), newSettings())
 	root.AddCommand(newListings()...)
 
 	return root
@@ -66,6 +67,10 @@ func isPorted(root *cobra.Command, args []string) bool {
 	// --json", or one of its subcommands that's still the bash script's,
 	// such as "lpod images prune --json". A flag lpod doesn't know is an
 	// error for lpod in Go to print...
+	if len(rest) > 0 && !strings.HasPrefix(rest[0], "-") {
+		return false
+	}
+
 	if err := command.ParseFlags(rest); err != nil {
 		return slices.Contains(rest, "--json")
 	}

@@ -112,3 +112,21 @@ func TestLinger(t *testing.T) {
 		t.Errorf("got %v, want ErrUnknown", err)
 	}
 }
+
+func TestUnitDir(t *testing.T) {
+	env := map[string]string{"HOME": "/home/blue"}
+	getenv := func(name string) string { return env[name] }
+
+	if got := UnitDir(true, getenv); got != "/etc/systemd/system" {
+		t.Errorf("got %s as root", got)
+	}
+
+	if got := UnitDir(false, getenv); got != "/home/blue/.config/systemd/user" {
+		t.Errorf("got %s", got)
+	}
+
+	env["XDG_CONFIG_HOME"] = "/srv/config"
+	if got := UnitDir(false, getenv); got != "/srv/config/systemd/user" {
+		t.Errorf("got %s with XDG_CONFIG_HOME", got)
+	}
+}

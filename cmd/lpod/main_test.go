@@ -69,6 +69,8 @@ func TestIsPorted(t *testing.T) {
 		{[]string{"events", "--bogus", "--json"}, true},
 		{[]string{"journal", "--lines", "10", "--since", "boot", "--json"}, true},
 		{[]string{"journal", "status", "--json"}, false},
+		{[]string{"settings", "--json"}, true},
+		{[]string{"settings", "set", "--auto-update", "on", "--json"}, false},
 		{[]string{"auto-update", "--dry-run", "--json"}, true},
 		{[]string{"auto-update", "--json"}, true},
 		{[]string{"auto-update", "--dry-run"}, false},

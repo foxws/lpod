@@ -178,7 +178,7 @@ func TestCPUUsageWithoutProcStat(t *testing.T) {
 	}
 }
 
-func TestHomePath(t *testing.T) {
+func TestHomePathWritesHomeAsTilde(t *testing.T) {
 	cases := map[string]string{
 		"/home/blue/.config":  "~/.config",
 		"/home/blue":          "~",
@@ -187,12 +187,12 @@ func TestHomePath(t *testing.T) {
 	}
 
 	for path, want := range cases {
-		if got := homePath(path, "/home/blue"); got != want {
-			t.Errorf("homePath(%s) = %s, want %s", path, got, want)
+		if got := HomePath(path, "/home/blue"); got != want {
+			t.Errorf("HomePath(%s) = %s, want %s", path, got, want)
 		}
 	}
 
-	if got := homePath("/etc", "/"); got != "/etc" {
+	if got := HomePath("/etc", "/"); got != "/etc" {
 		t.Errorf("got %s with / as home, want /etc", got)
 	}
 }

@@ -171,7 +171,7 @@ func system(ctx context.Context, m Machine) contract.HostSystem {
 		OS:         contract.String(osName(m.Root)),
 		Kernel:     contract.String(strings.TrimSpace(string(kernel))),
 		BootedAt:   contract.Time{Time: bootedAt(m.Root)},
-		QuadletDir: homePath(quadlet.Dir(m.Rootful, m.Getenv), m.Getenv("HOME")),
+		QuadletDir: HomePath(quadlet.Dir(m.Rootful, m.Getenv), m.Getenv("HOME")),
 	}
 
 	if !m.Rootful {
@@ -185,8 +185,8 @@ func system(ctx context.Context, m Machine) contract.HostSystem {
 	return described
 }
 
-// homePath writes path with the home directory as "~".
-func homePath(path, home string) string {
+// HomePath writes path with the home directory as "~".
+func HomePath(path, home string) string {
 	if home == "" || home == "/" {
 		return path
 	}
