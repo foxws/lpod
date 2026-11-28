@@ -251,6 +251,45 @@ type Network struct {
 	Default bool `json:"default"`
 }
 
+// Journal is what "lpod journal --json" prints (journal.json).
+type Journal struct {
+	Contract int            `json:"contract"`
+	Entries  []JournalEntry `json:"entries"`
+}
+
+// JournalEntry is a line of the journal, oldest first.
+type JournalEntry struct {
+	Time Time `json:"time"`
+	// Unit is the unit that logged it, without ".service".
+	Unit string `json:"unit"`
+	// Priority is syslog's, from 0 (emergency) to 7 (debug).
+	Priority int    `json:"priority"`
+	Message  string `json:"message"`
+}
+
+// Events is what "lpod events --json" prints (events.json).
+type Events struct {
+	Contract int     `json:"contract"`
+	Events   []Event `json:"events"`
+}
+
+// Event is something that happened to a container or an image, newest
+// first.
+type Event struct {
+	Time Time `json:"time"`
+	// Type is "container" or "image", and Action such as "start", "died"
+	// or "pull".
+	Type   string `json:"type"`
+	Action string `json:"action"`
+	// Name is the container's, or the image's reference or ID.
+	Name string `json:"name"`
+	// Image is the container's image, and null for an image.
+	Image       *string `json:"image"`
+	Application *string `json:"application"`
+	// ExitCode is null unless a container died.
+	ExitCode *int `json:"exit_code"`
+}
+
 // OK is what a --json command that only changes something prints.
 type OK struct {
 	Contract int  `json:"contract"`
