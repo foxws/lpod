@@ -24,7 +24,7 @@ func TestRunPrintsTheVersion(t *testing.T) {
 }
 
 func TestRunHandsOffWhatIsntPorted(t *testing.T) {
-	for _, args := range [][]string{{}, {"apps", "--json"}, {"stry", "version"}, {"help"}, {"completion"}, {"--help"}} {
+	for _, args := range [][]string{{}, {"apps", "--json"}, {"demo", "version"}, {"help"}, {"completion"}, {"--help"}} {
 		var stdout, stderr bytes.Buffer
 
 		if _, ported := run(context.Background(), args, &stdout, &stderr); ported {
@@ -47,7 +47,7 @@ func TestIsPorted(t *testing.T) {
 		{[]string{"host", "--json"}, true},
 		{[]string{"--json", "version"}, false},
 		{[]string{"hosts"}, false},
-		{[]string{"stry", "host"}, false},
+		{[]string{"demo", "host"}, false},
 		{[]string{"images", "--json"}, true},
 		{[]string{"images"}, false},
 		{[]string{"images", "status", "--json"}, false},
